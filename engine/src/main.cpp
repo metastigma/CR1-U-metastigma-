@@ -87,7 +87,7 @@ enum class Mode { Textures, Models, Maps };
 
 // Original animations are keyed in frames, played a frame a game frame (core/timing.hpp: 20 a second)
 using cr::kFramesPerSecond;
-constexpr float kFieldActionBlendFrames=6.0f; // 0.3 s at the original 20 Hz logic rate
+constexpr float kFieldActionBlendFrames=4.0f; // 0.2 s at the original 20 Hz logic rate
 
 struct LoadedModel {
     cr::Model cpu;                       // skeleton, skin data, rest pose
@@ -2112,8 +2112,7 @@ void animate(App& app, LoadedModel& lm, float dt) {
     if(!lm.transitionFrom.empty()&&lm.transitionFrom.size()==m.skeleton.nodes.size()){
         cr::computeLocalPoses(m.skeleton,act,lm.time,lm.transitionTarget);
         lm.transitionTime=std::min(kFieldActionBlendFrames,lm.transitionTime+std::max(0.0f,dt)*kFramesPerSecond);
-        float t=lm.transitionTime/kFieldActionBlendFrames;
-        t=t*t*t*(t*(t*6.0f-15.0f)+10.0f); // quintic smootherstep
+        float t=lm.transitionTime/kFieldActionBlendFrames;t=t*t*(3.0f-2.0f*t);
         cr::blendLocalPoses(lm.transitionFrom,lm.transitionTarget,t,lm.localPose);
         if(lm.transitionTime>=kFieldActionBlendFrames){lm.transitionFrom.clear();lm.transitionTarget.clear();}
     }else{lm.transitionFrom.clear();lm.transitionTarget.clear();cr::computeLocalPoses(m.skeleton,act,lm.time,lm.localPose);}
@@ -2586,7 +2585,11 @@ struct ViewerHost : cr::EventHost {
     void showMessage(int id) override { showMessages(app, {id}); }
     bool messageOpen() override { return !app.dialogue.empty(); }
     bool tapped() override { const bool t = app.tapPending; app.tapPending = false; return t; }
-    void showItemWindow(int item) override { app.itemWindowOpen = true; app.itemWindowItem = item; }
+    void showItemWindow(int item) override {
+        app.game.setFlag(0, false); // confirmation belongs to this item window, not the previous interaction
+        app.itemWindowOpen = true;
+        app.itemWindowItem = item;
+    }
     void playAnim(int id, int slot, int loopFrom, int loopTo) override {
         int action = slot; // a slot LoadAct filled, else the model's own action of that number
         if (auto a = app.actorSlots.find(id); a != app.actorSlots.end())
@@ -9263,8 +9266,8 @@ void updatePlayer(App& app, float dt, float camYaw) {
     if (!app.havePlayer) return;
     const bool* keys = SDL_GetKeyboardState(nullptr);
     // A running script, its dialogue box or item window hold the player in place
-    const bool talking = !app.dialogue.empty() || app.runner.running() || app.itemWindowOpen || app.optionsOpen ||
-                         app.campOpen || app.saveScreen.open || app.shop.open || app.mapScreen.open ||
+    const bool talking = fieldSceneRunning(app) || app.optionsOpen || app.campOpen || app.saveScreen.open ||
+                         app.shop.open || app.mapScreen.open ||
                          app.puzzle.tpState != 0 || app.puzzle.pkState != 0 ||
                          (app.puzzle.stage >= 0 && app.puzzle.scene != 4);
     if (talking) app.walker.gait = cr::Gait::Stand; // scripts skip stepWalker, so stop the animation here too
@@ -9295,15 +9298,15 @@ void updatePlayer(App& app, float dt, float camYaw) {
         BetweenStep between(app);
         stepEvents(app);
         if (app.battle.active) break;
-        if (app.runner.running()) app.walker.gait = cr::Gait::Stand; // a touch trigger may start a script this step
-        if (app.runner.running() || !app.havePlayer) continue;
+        if (fieldSceneRunning(app)) app.walker.gait = cr::Gait::Stand;
+        if (fieldSceneRunning(app) || !app.havePlayer) continue;
         const cr::Vec3 before = app.walker.pos;
         cr::stepWalker(app.walker, app.walkCollision, sx, sy, run, camYaw);
         const cr::Vec3 moved = app.walker.pos - before;
         fieldWalked(app, std::sqrt(cr::dot(moved, moved)));
         checkTriggers(app);
-        if (app.runner.running() || !app.dialogue.empty()) app.walker.gait = cr::Gait::Stand;
-        if (app.runner.running() || !app.dialogue.empty() || !app.havePlayer) continue;
+        if (fieldSceneRunning(app)) app.walker.gait = cr::Gait::Stand;
+        if (fieldSceneRunning(app) || !app.havePlayer) continue;
         cr::BattleStart start; // fldencount_encount
         auto random = [&](int n) { return app.rng.get(n); };
         const int pr = std::clamp(app.playerChar / 2, 0, 3) * 2; // 171 Preemptive / 172 Alert on either member
@@ -15121,12 +15124,16 @@ int runSelfTest(App& app) {
             if (!ok) ++mapErrors;
         }
         int lidAnimFrame = -1, windowFrame = -1, fadedFrame = -1, endFrame = -1, frames = 0;
+        bool staleItemFlagCleared = false, itemWindowClosedEarly = false;
+        bool itemWindowHeldForRead = false, playerStoppedAtChest = false;
         const cr::FieldNpc* box = nullptr;
         for (const cr::FieldNpc& n : app.npcs)
             if ((n.treasure & 3) && npcActive(app, n)) { box = &n; break; }
         if (box && app.havePlayer) {
             const int boxId = box->id;
             app.walker.pos = {box->pos[0] + box->box[0] / 2 + app.walker.radius, box->pos[1], box->pos[2]};
+            app.tapPending = false;
+            app.game.setFlag(0, true); // simulate a stale confirmation left by the previous interaction
             { // opened by touch, as on the iPad: the "!" button in the corner (FollowWindow::checkTouchEasyButton)
                 float l0x, l0y, l1x, l1y, ex, ey;
                 app.renderer.toLogical(0, 0, l0x, l0y);
@@ -15150,8 +15157,22 @@ int runSelfTest(App& app) {
                         if (lidAnimFrame < 0 && d.action == 1) lidAnimFrame = frames;
                         if (fadedFrame < 0 && d.alpha < 0.1f) fadedFrame = frames;
                     }
-                if (windowFrame < 0 && app.itemWindowOpen) windowFrame = frames;
-                if (app.itemWindowOpen && frames - windowFrame == 30) app.tapPending = true; // read it, then tap
+                if (windowFrame < 0 && app.itemWindowOpen) {
+                    windowFrame = frames;
+                    staleItemFlagCleared = !app.game.flag(0);
+                }
+                if (windowFrame >= 0 && frames - windowFrame < 30 && !app.itemWindowOpen) itemWindowClosedEarly = true;
+                if (app.itemWindowOpen && frames - windowFrame == 10 && app.havePlayer && app.player.actions.size() > 2) {
+                    app.player.action = 2; // simulate reaching the chest while the run action is active
+                    app.player.time = 1;
+                    app.walker.gait = cr::Gait::Run;
+                    updatePlayer(app, 0, 0);
+                    playerStoppedAtChest = app.walker.gait == cr::Gait::Stand && app.player.action == 0;
+                }
+                if (app.itemWindowOpen && frames - windowFrame == 30) {
+                    itemWindowHeldForRead = true;
+                    app.tapPending = true; // the player confirms after reading the item
+                }
                 if (!app.dialogue.empty()) app.dialogue.clear();
                 if (!app.runner.running() && endFrame < 0) endFrame = frames;
             }
@@ -15160,11 +15181,16 @@ int runSelfTest(App& app) {
             std::printf("stepped chest sounds:");
             for (uint32_t id : app.soundLog) std::printf(" %u", id);
             std::printf("\n");
-            std::printf("stepped chest %d: lid anim at frame %d, item window %d, lid faded %d, done %d, item %s, lid %s\n",
-                        boxId, lidAnimFrame, windowFrame, fadedFrame, endFrame,
+            std::printf("stepped chest %d: lid anim %d, item window %d (flag reset %s, held for read %s, closed early %s), "
+                        "player stopped %s, lid faded %d, done %d, item %s, lid %s\n",
+                        boxId, lidAnimFrame, windowFrame, staleItemFlagCleared ? "yes" : "NO",
+                        itemWindowHeldForRead ? "yes" : "NO", itemWindowClosedEarly ? "YES" : "no",
+                        playerStoppedAtChest ? "yes" : "NO", fadedFrame, endFrame,
                         app.game.items.size() > itemsBefore || !app.game.items.empty() ? "gained" : "MISSING",
                         lidGone ? "removed" : "STILL THERE");
-            if (lidAnimFrame < 0 || windowFrame < 0 || endFrame < 0 || !lidGone) ++mapErrors;
+            if (lidAnimFrame < 0 || windowFrame < 0 || endFrame < 0 || !lidGone ||
+                !staleItemFlagCleared || itemWindowClosedEarly || !itemWindowHeldForRead || !playerStoppedAtChest)
+                ++mapErrors;
         }
         // exit: walk into trigger 2's box and let the script play
         for (const cr::FieldNpc& n : app.npcs)
