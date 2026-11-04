@@ -87,6 +87,7 @@ enum class Mode { Textures, Models, Maps };
 
 // Original animations are keyed in frames, played a frame a game frame (core/timing.hpp: 20 a second)
 using cr::kFramesPerSecond;
+constexpr float kFieldActionBlendFrames=4.0f;
 
 struct LoadedModel {
     cr::Model cpu;                       // skeleton, skin data, rest pose
@@ -103,6 +104,8 @@ struct LoadedModel {
     int triangles = 0;
     std::vector<cr::Mat4> world;
     std::vector<float> skinned;
+    std::vector<cr::NodePose> localPose, transitionFrom, transitionTarget;
+    float transitionTime=0;
     std::vector<cr::Action> packageActions; // effects: every action, as materials' refGid number them
     std::vector<float> uvScratch;          // effects: a mesh's scrolled texture coordinates
 };
@@ -2106,13 +2109,27 @@ void animate(App& app, LoadedModel& lm, float dt) {
             lm.time = float(lm.loopFrom) + std::fmod(lm.time - float(lm.loopFrom), act->duration - float(lm.loopFrom));
         else if (act->duration > 0) lm.time = std::fmod(lm.time, act->duration);
     }
-    cr::computeWorld(m.skeleton, act, lm.time, lm.world);
+    if(!lm.transitionFrom.empty()&&lm.transitionFrom.size()==m.skeleton.nodes.size()){
+        cr::computeLocalPoses(m.skeleton,act,lm.time,lm.transitionTarget);
+        lm.transitionTime=std::min(kFieldActionBlendFrames,lm.transitionTime+std::max(0.0f,dt)*kFramesPerSecond);
+        float t=lm.transitionTime/kFieldActionBlendFrames;t=t*t*(3.0f-2.0f*t);
+        cr::blendLocalPoses(lm.transitionFrom,lm.transitionTarget,t,lm.localPose);
+        if(lm.transitionTime>=kFieldActionBlendFrames){lm.transitionFrom.clear();lm.transitionTarget.clear();}
+    }else{lm.transitionFrom.clear();lm.transitionTarget.clear();cr::computeLocalPoses(m.skeleton,act,lm.time,lm.localPose);}
+    cr::computeWorldFromLocalPoses(m.skeleton,lm.localPose,lm.world);
     for (size_t i = 0; i < m.meshes.size(); ++i) {
         cr::skinMesh(m, m.meshes[i], lm.world, lm.skinned);
         app.renderer.updatePositions(lm.meshes[i], lm.skinned, m.meshes[i].uvs, m.meshes[i].colors);
     }
 }
 
+void resetPoseTransition(LoadedModel& lm){lm.localPose.clear();lm.transitionFrom.clear();lm.transitionTarget.clear();lm.transitionTime=0;}
+void setPlayerAction(LoadedModel& lm,int action){
+ if(lm.action==action)return;
+ const cr::Action* old=lm.action>=0&&lm.action<int(lm.actions.size())?&lm.actions[lm.action]:nullptr;
+ if(lm.localPose.size()!=lm.cpu.skeleton.nodes.size())cr::computeLocalPoses(lm.cpu.skeleton,old,lm.time,lm.localPose);
+ lm.transitionFrom=lm.localPose;lm.transitionTarget.clear();lm.transitionTime=0;lm.action=action;lm.time=0;
+}
 void animateModel(App& app, float dt) { animate(app, app.model, dt); }
 
 // Field models of the party (the binary names f001/f003/f005/f007, one per route).
@@ -2168,6 +2185,7 @@ void placePlayer(App& app) {
     app.walker.gait = cr::Gait::Stand;
     app.player.action = app.player.actions.empty() ? -1 : 0;
     app.player.time = 0;
+    resetPoseTransition(app.player);
     app.walkClock = 0;
     app.havePlayer = true;
     app.lastKick = triggerAt(app, app.walker.pos); // starting inside a box doesn't fire it
@@ -9303,8 +9321,7 @@ void updatePlayer(App& app, float dt, float camYaw) {
     const bool hold = app.puzzle.pkState != 0 && app.player.actions.size() > 3;
     const int want = hold ? 3 : std::min(int(app.walker.gait), int(app.player.actions.size()) - 1);
     if (want != app.player.action) {
-        app.player.action = want;
-        app.player.time = 0;
+        setPlayerAction(app.player,want);
         app.footPrev = 0;
     }
     app.player.loopFrom = hold ? 2 : -1;
@@ -17499,7 +17516,7 @@ int runSelfTest(App& app) {
             app.walker.gait = cr::Gait::Walk;
             for (int f = 0; f < 60; ++f) {
                 const int want = std::min(int(app.walker.gait), int(app.player.actions.size()) - 1);
-                if (want != app.player.action) app.player.action = want, app.player.time = 0, app.footPrev = 0;
+                if (want != app.player.action) setPlayerAction(app.player,want), app.footPrev = 0;
                 animate(app, app.player, 1.0f / kFramesPerSecond);
                 playFootsteps(app);
                 stepEffects(app, app.fieldEffects);
