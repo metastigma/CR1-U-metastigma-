@@ -19347,7 +19347,7 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
         break;
     case SDL_EVENT_KEY_DOWN:
         // The X key must be observed before battle/menu handlers can consume the event.
-        if (event->key.key == SDLK_X && app.mode == Mode::Maps && app.runner.running())
+        if (event->key.key == SDLK_X && !event->key.repeat && app.mode == Mode::Maps && app.runner.running())
             setSceneSkip(app, crinput::HeldSource::Keyboard, true);
         if (app.vitaLogo.phase) { // the Vita's logos: confirm cuts the hold short
             const SDL_Keycode k = event->key.key;
@@ -19527,10 +19527,7 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
             break;
         case SDLK_U: app.zUp = !app.zUp; updateTitle(app); break;
         case SDLK_F: app.smoothFilter = !app.smoothFilter; updateTitle(app); break;
-        case SDLK_X:
-            if (app.mode == Mode::Maps && app.runner.running())
-                setSceneSkip(app, crinput::HeldSource::Keyboard, true);
-            break;
+        case SDLK_X: break; // handled above, before modal and battle handlers
         case SDLK_N:
             if (app.mode == Mode::Models) selectAction(app, 1);
             else if (app.mode == Mode::Maps) { app.showNpcs = !app.showNpcs; buildNpcDraws(app); updateTitle(app); }
