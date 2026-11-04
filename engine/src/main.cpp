@@ -6455,11 +6455,12 @@ void drawVitaLogo(App& app) {
     const float a = l.phase == 1 ? float(l.frame) / float(std::max(1, l.in)) : l.phase == 2 ? 1.0f
                     : l.phase == 3 ? 1.0f - float(l.frame) / float(std::max(1, l.out)) : 0.0f;
     if (t.id && a > 0) {
-        // the picture's own size: 1024 x 768 (or 960 x 544 for the warning) of its sheet
-        const float pw = t.width >= 1024 ? 1024.0f : 960.0f, ph = t.width >= 1024 ? 768.0f : 544.0f;
+        // All Vita boot pictures use the same 960 x 544 window at the sheet's top-left.
+        // Scale that native Vita frame to the 768-pixel logical height, then centre it in the
+        // current logical screen (the sides naturally remain letterboxed/cropped by the viewport).
+        constexpr float pw = 960.0f, ph = 544.0f;
         const float k = std::min(r.screenW() / pw, float(cr::Renderer::kLogicalH) / ph), w = pw * k, h = ph * k;
-        const float su = float(t.width) / (t.width >= 1024 ? 1024.0f : 960.0f); // (the sheet may be larger)
-        r.drawQuadUV(t, (r.screenW() - w) / 2, (cr::Renderer::kLogicalH - h) / 2, w, h, 0, 0, pw * su, ph * su, 1, 1, 1, a);
+        r.drawQuadUV(t, (r.screenW() - w) / 2, (cr::Renderer::kLogicalH - h) / 2, w, h, 0, 0, pw, ph, 1, 1, 1, a);
     }
     r.setOrigin(r.uiX());
 }
