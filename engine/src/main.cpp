@@ -710,6 +710,7 @@ struct App {
     struct NowLoading { bool on = false; int frame = 0; } nowLoading; // NowLoadProc's spinner
     struct VitaLogo {                      // the Vita's boot opcodes 0x47..0x4a: a full-screen logo
         cr::Texture tex[2];                // by slot (0x47's slot + 16 in the original's Tex2d)
+        int picture[2] = {-1, -1};          // source picture ID per slot (254 is the warning)
         int slot = -1, phase = 0, frame = 0, in = 0, hold = 0, out = 0;
         bool skip = false;                 // a tap / confirm in the hold: on to the fade-out
     } vitaLogo;
@@ -2872,6 +2873,7 @@ struct ViewerHost : cr::EventHost {
         App::VitaLogo& l = app.vitaLogo;
         const int k = std::clamp(std::abs(slot), 0, 1);
         app.renderer.destroy(l.tex[k]);
+        l.picture[k] = name ? picture : -1;
         cr::Image img;
         if (name && loadImage(app, std::string(name) + "_hd.mct", img)) l.tex[k] = app.renderer.upload(img);
     }
@@ -6455,11 +6457,11 @@ void drawVitaLogo(App& app) {
     const float a = l.phase == 1 ? float(l.frame) / float(std::max(1, l.in)) : l.phase == 2 ? 1.0f
                     : l.phase == 3 ? 1.0f - float(l.frame) / float(std::max(1, l.out)) : 0.0f;
     if (t.id && a > 0) {
-        // the picture's own size: 1024 x 768 (or 960 x 544 for the warning) of its sheet
-        const float pw = t.width >= 1024 ? 1024.0f : 960.0f, ph = t.width >= 1024 ? 768.0f : 544.0f;
+        // Vita's screen window starts at the sheet's left edge: only 960 source pixels are visible.
+        // The original logo sheets use a 768-pixel height; the warning uses the Vita's 544-pixel height.
+        const float pw = 960.0f, ph = l.picture[std::clamp(l.slot, 0, 1)] == 254 ? 544.0f : 768.0f;
         const float k = std::min(r.screenW() / pw, float(cr::Renderer::kLogicalH) / ph), w = pw * k, h = ph * k;
-        const float su = float(t.width) / (t.width >= 1024 ? 1024.0f : 960.0f); // (the sheet may be larger)
-        r.drawQuadUV(t, (r.screenW() - w) / 2, (cr::Renderer::kLogicalH - h) / 2, w, h, 0, 0, pw * su, ph * su, 1, 1, 1, a);
+        r.drawQuadUV(t, (r.screenW() - w) / 2, (cr::Renderer::kLogicalH - h) / 2, w, h, 0, 0, pw, ph, 1, 1, 1, a);
     }
     r.setOrigin(r.uiX());
 }
