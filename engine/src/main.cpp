@@ -76,6 +76,7 @@
 #include "platform/paths.hpp"
 #include "platform/setup.hpp"
 #include "platform/input_cancel.hpp"
+#include "platform/held_action.hpp"
 #include "platform/atomic_file.hpp"
 #include "platform/lifecycle_clock.hpp"
 #include "scene/pose.hpp"
@@ -347,7 +348,8 @@ struct App {
     };
     Portrait portraits[16];
     bool itemWindowOpen = false;           // Uty_GetItem
-    bool skipScene = false;                // the skip button (X): pages turn by themselves until the scene ends
+    crinput::HeldAction skipSources;       // independent held inputs: keyboard X, gamepad □, skip corner
+    bool skipScene = false;                // derived from skipSources; active only while a source is held
     int msgStyle = 2, msgLines = 2;        // the script's last Open: the message window's style and lines
     double playSeconds = 0;                // TOTAL PLAYTIME: time on the field and in battles
     // The save / load screen (__menuu_SaveLoad*): from the Camp menu (save) or the title's Start
@@ -834,6 +836,15 @@ struct App {
     float speed = 1.0f;
     Uint64 lastTicks = 0;
 };
+
+void setSceneSkip(App& app, crinput::HeldSource source, bool held) {
+    app.skipSources.set(source, held);
+    app.skipScene = app.skipSources.active();
+}
+void clearSceneSkip(App& app) {
+    app.skipSources.clear();
+    app.skipScene = false;
+}
 
 // The menus' sounds: __effgo ids (sndeff.bin entries) as the original's *Prc functions use them
 namespace se {
@@ -8942,7 +8953,7 @@ void drawFx(App& app, const cr::Mat4& mvp) {
 
 void stepEvents(App& app) {
     if (app.skipScene) { // fast-forward: every page turns at once (choices still wait for an answer)
-        if (!app.runner.running()) app.skipScene = false;
+        if (!app.runner.running()) clearSceneSkip(app);
         else if (!app.dialogue.empty()) advanceDialogue(app);
     }
     stepTyping(app);
@@ -10313,7 +10324,7 @@ void step(App& app) {
     if (!app.runner.running()) { app.game.setFlag(kFlag, false); return; }
     stepEvents(app);
     if (app.game.flag(kFlag)) return;
-    app.skipScene = false; // (the skip button ends with the talk)
+    clearSceneSkip(app); // (all held skip sources end with the talk)
     if (!app.battle.eventBattle) app.runner.stop();
 }
 } // namespace battletalk
@@ -12420,7 +12431,8 @@ void battleClick(App& app, float px, float py) {
     const float uiX = app.renderer.uiX(), rightX = app.renderer.phoneLayout() ? uiX : 2 * uiX;
     const float cx = (lx - uiX) / 2, rx = (lx - rightX) / 2, my = ly / 2;
     if (battletalk::on(app)) { // a talk: the skip corner, else the next page
-        if (lx >= app.renderer.layoutRight() - 76 && ly < app.renderer.layoutTop() + 72) app.skipScene = true;
+        if (lx >= app.renderer.layoutRight() - 76 && ly < app.renderer.layoutTop() + 72)
+            setSceneSkip(app, crinput::HeldSource::Pointer, true);
         else if (!app.dialogue.empty()) tapDialogue(app);
         else app.tapPending = true;
         return;
@@ -17589,7 +17601,8 @@ void bootTitle(App& app) {
     app.touchPad = App::TouchPad();
     app.menuMask = App::MenuMask();
     app.campPointer = App::CampPointer();
-    app.dragging = app.optionsBarDrag = app.tapPending = app.skipScene = false;
+    app.dragging = app.optionsBarDrag = app.tapPending = false;
+    clearSceneSkip(app);
     app.padHeld = -1;
     app.padHeldFor = 0;
     app.padHeldOver.cancel();
@@ -19217,7 +19230,8 @@ void padButton(App& app, int b) {
         return;
     case SDL_GAMEPAD_BUTTON_WEST: // □: text skipped; in a puzzle room, the ability
         if (padField(app) && puzzle) padKey(app, SDLK_T);
-        else if (app.mode == Mode::Maps && app.runner.running()) padKey(app, SDLK_X);
+        else if (app.mode == Mode::Maps && app.runner.running())
+            setSceneSkip(app, crinput::HeldSource::Gamepad, true);
         return;
     case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: padKey(app, SDLK_PAGEUP); return;   // L: a page back
     case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: padKey(app, SDLK_PAGEDOWN); return; // R: a page on
@@ -19277,7 +19291,8 @@ void consumeInputCancel(App& app) {
     app.dragging = app.optionsBarDrag = false;
     app.campPointer = App::CampPointer();
     app.touchPad = App::TouchPad();
-    app.tapPending = app.skipScene = false;
+    app.tapPending = false;
+    clearSceneSkip(app);
     app.padHeld = -1, app.padHeldFor = 0;
     app.padHeldOver.cancel();
     app.pointerCancelled = true;
@@ -19313,12 +19328,27 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
         }
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
-        if (app.pad && SDL_GetGamepadID(app.pad) == event->gdevice.which) SDL_CloseGamepad(app.pad), app.pad = nullptr;
+        if (app.pad && SDL_GetGamepadID(app.pad) == event->gdevice.which) {
+            SDL_CloseGamepad(app.pad);
+            app.pad = nullptr;
+            setSceneSkip(app, crinput::HeldSource::Gamepad, false);
+        }
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         if (app.pad && SDL_GetGamepadID(app.pad) == event->gbutton.which) padButton(app, event->gbutton.button);
         break;
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        if (app.pad && SDL_GetGamepadID(app.pad) == event->gbutton.which &&
+            event->gbutton.button == SDL_GAMEPAD_BUTTON_WEST)
+            setSceneSkip(app, crinput::HeldSource::Gamepad, false);
+        break;
+    case SDL_EVENT_KEY_UP:
+        if (event->key.key == SDLK_X) setSceneSkip(app, crinput::HeldSource::Keyboard, false);
+        break;
     case SDL_EVENT_KEY_DOWN:
+        // The X key must be observed before battle/menu handlers can consume the event.
+        if (event->key.key == SDLK_X && !event->key.repeat && app.mode == Mode::Maps && app.runner.running())
+            setSceneSkip(app, crinput::HeldSource::Keyboard, true);
         if (app.vitaLogo.phase) { // the Vita's logos: confirm cuts the hold short
             const SDL_Keycode k = event->key.key;
             if (app.vitaLogo.phase == 2 && (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE || k == SDLK_E || k == SDLK_ESCAPE))
@@ -19497,7 +19527,7 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
             break;
         case SDLK_U: app.zUp = !app.zUp; updateTitle(app); break;
         case SDLK_F: app.smoothFilter = !app.smoothFilter; updateTitle(app); break;
-        case SDLK_X: if (app.mode == Mode::Maps && app.runner.running()) app.skipScene = true; break;
+        case SDLK_X: break; // handled above, before modal and battle handlers
         case SDLK_N:
             if (app.mode == Mode::Models) selectAction(app, 1);
             else if (app.mode == Mode::Maps) { app.showNpcs = !app.showNpcs; buildNpcDraws(app); updateTitle(app); }
@@ -19602,7 +19632,7 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
             float lx, ly;
             app.renderer.toLogical(event->button.x * kx, event->button.y * ky, lx, ly);
             if (lx >= app.renderer.layoutRight() - 76 && ly < app.renderer.layoutTop() + 72) {
-                app.skipScene = true;
+                setSceneSkip(app, crinput::HeldSource::Pointer, true);
                 break;
             }
             if (app.choiceFlag >= 0) { // the Yes / No plates (0x88 x 0x28)
@@ -19628,6 +19658,7 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
         }
         break;
     case SDL_EVENT_MOUSE_BUTTON_UP:
+        setSceneSkip(app, crinput::HeldSource::Pointer, false);
         if (app.pointerCancelled) break; // cancellation is not a click or a puzzle release
         if (app.campPointer.down) {
             int ww = 0, wh = 0;
