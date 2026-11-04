@@ -87,7 +87,7 @@ enum class Mode { Textures, Models, Maps };
 
 // Original animations are keyed in frames, played a frame a game frame (core/timing.hpp: 20 a second)
 using cr::kFramesPerSecond;
-constexpr float kFieldActionBlendFrames=4.0f;
+constexpr float kFieldActionBlendFrames=6.0f; // 0.3 s at the original 20 Hz logic rate
 
 struct LoadedModel {
     cr::Model cpu;                       // skeleton, skin data, rest pose
@@ -2112,7 +2112,8 @@ void animate(App& app, LoadedModel& lm, float dt) {
     if(!lm.transitionFrom.empty()&&lm.transitionFrom.size()==m.skeleton.nodes.size()){
         cr::computeLocalPoses(m.skeleton,act,lm.time,lm.transitionTarget);
         lm.transitionTime=std::min(kFieldActionBlendFrames,lm.transitionTime+std::max(0.0f,dt)*kFramesPerSecond);
-        float t=lm.transitionTime/kFieldActionBlendFrames;t=t*t*(3.0f-2.0f*t);
+        float t=lm.transitionTime/kFieldActionBlendFrames;
+        t=t*t*t*(t*(t*6.0f-15.0f)+10.0f); // quintic smootherstep
         cr::blendLocalPoses(lm.transitionFrom,lm.transitionTarget,t,lm.localPose);
         if(lm.transitionTime>=kFieldActionBlendFrames){lm.transitionFrom.clear();lm.transitionTarget.clear();}
     }else{lm.transitionFrom.clear();lm.transitionTarget.clear();cr::computeLocalPoses(m.skeleton,act,lm.time,lm.localPose);}
@@ -9266,6 +9267,7 @@ void updatePlayer(App& app, float dt, float camYaw) {
                          app.campOpen || app.saveScreen.open || app.shop.open || app.mapScreen.open ||
                          app.puzzle.tpState != 0 || app.puzzle.pkState != 0 ||
                          (app.puzzle.stage >= 0 && app.puzzle.scene != 4);
+    if (talking) app.walker.gait = cr::Gait::Stand; // scripts skip stepWalker, so stop the animation here too
     float sx = talking ? 0.0f : float(keys[SDL_SCANCODE_D]) - float(keys[SDL_SCANCODE_A]);
     float sy = talking ? 0.0f : float(keys[SDL_SCANCODE_S]) - float(keys[SDL_SCANCODE_W]);
     bool run = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
@@ -9293,12 +9295,14 @@ void updatePlayer(App& app, float dt, float camYaw) {
         BetweenStep between(app);
         stepEvents(app);
         if (app.battle.active) break;
+        if (app.runner.running()) app.walker.gait = cr::Gait::Stand; // a touch trigger may start a script this step
         if (app.runner.running() || !app.havePlayer) continue;
         const cr::Vec3 before = app.walker.pos;
         cr::stepWalker(app.walker, app.walkCollision, sx, sy, run, camYaw);
         const cr::Vec3 moved = app.walker.pos - before;
         fieldWalked(app, std::sqrt(cr::dot(moved, moved)));
         checkTriggers(app);
+        if (app.runner.running() || !app.dialogue.empty()) app.walker.gait = cr::Gait::Stand;
         if (app.runner.running() || !app.dialogue.empty() || !app.havePlayer) continue;
         cr::BattleStart start; // fldencount_encount
         auto random = [&](int n) { return app.rng.get(n); };
@@ -15750,6 +15754,15 @@ int runSelfTest(App& app) {
         }
         problems += app.area != 7 || app.mapNumber != 103;
         app.runner.start(app.events, 251, app.game, app.area, app.mapNumber);
+        bool stoodDuringShopScript = false;
+        if (app.havePlayer && app.player.actions.size() > 2) {
+            app.player.action = 2; // simulate entering the interaction during the run clip
+            app.player.time = 1;
+            app.walker.gait = cr::Gait::Run;
+            updatePlayer(app, 1.0f / kFramesPerSecond, 0);
+            stoodDuringShopScript = app.walker.gait == cr::Gait::Stand && app.player.action == 0;
+        }
+        problems += !stoodDuringShopScript;
         for (int f = 0; f < 600 && app.runner.running() && !app.shop.open; ++f) {
             stepEvents(app);
             app.dialogue.clear();
@@ -15835,9 +15848,10 @@ int runSelfTest(App& app) {
             app.tapPending = true;
         }
         problems += app.shop.open || app.runner.running();
-        std::printf("shops: %d items; Ark shop opened by its script %s, bought 2 and sold 1 (%d Oz left), Talk played %zu "
-                    "messages in %d frames; %d problems\n",
-                    app.itemTable.count(), opened ? "ok" : "FAILED", app.game.oz, talkMessages, talkFrames, problems);
+        std::printf("shops: %d items; Ark shop opened by its script %s, gait stopped during its script %s, "
+                    "bought 2 and sold 1 (%d Oz left), Talk played %zu messages in %d frames; %d problems\n",
+                    app.itemTable.count(), opened ? "ok" : "FAILED", stoodDuringShopScript ? "yes" : "NO",
+                    app.game.oz, talkMessages, talkFrames, problems);
         mapErrors += problems;
         bootTitle(app);
         app.runner.stop();
