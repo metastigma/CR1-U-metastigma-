@@ -227,11 +227,12 @@ struct App {
     bool optionsFromTitle = false;         // ModeOptionMenu(1): Reset Data instead of Return to Title
     int resetAsk = 0, resetConfirm = 1;    // Reset Data's two questions (OptionPrc 9 / 10: 1, 2), No under the cursor
     bool captureTitle = false;             // --capture ... --title
-    // Video. The defaults are the original presentation: a 1024x768 window, 4:3, the paintings at
-    // the screen's height, native resolution, no MSAA, vsync
+    // Video. Defaults: borderless desktop fullscreen, 4:3, paintings at the screen's height,
+    // native resolution, no MSAA, vsync. Windowed mode remains available via F11 / Options.
     struct Video {
         int width = 1024, height = 768;    // window size (windowed) or display mode (fullscreen)
         int display = 2;                   // 0 windowed, 1 fullscreen (that mode), 2 borderless (the desktop's)
+        bool displayExplicit = false;      // true only after the user deliberately chooses a display mode
         bool widescreen = false;           // the screen widens to the window (up to 21:9); else 4:3
         int paintings = 0;                 // painted rooms: 0 the original's (2x, a screen-sized window following
                                            // the player), 1 the whole painting at the screen's height, 2 at its width
@@ -3161,7 +3162,9 @@ void saveMix(const App& app) {
     for (int e : app.voiceEntries) list += (list.empty() ? "" : ",") + std::to_string(e);
     const App::Video& v = app.video;
     const std::string video = "width=" + std::to_string(v.width) + "\nheight=" + std::to_string(v.height) +
-                              "\ndisplay=" + std::to_string(v.display) + "\nwidescreen=" + std::to_string(int(v.widescreen)) +
+                              "\ndisplay=" + std::to_string(v.display) +
+                              "\ndisplay_user_set=" + std::to_string(int(v.displayExplicit)) +
+                              "\nwidescreen=" + std::to_string(int(v.widescreen)) +
                               "\npainted_rooms=" + std::to_string(v.paintings) + "\nrender_scale=" +
                               std::to_string(v.renderScale) + "\nmsaa=" + std::to_string(v.msaa) +
                               "\nvsync=" + std::to_string(int(v.vsync)) + "\nframe_limit=" + std::to_string(v.frameLimit) + "\nupscaler=" + std::to_string(v.upscaler) +
@@ -3215,7 +3218,12 @@ void loadVideo(App& app, const char* text) {
     App::Video& v = app.video;
     v.width = std::clamp(keyValue(text, "\nwidth=", v.width), 320, 3840);
     v.height = std::clamp(keyValue(text, "\nheight=", v.height), 240, 2160);
-    v.display = std::clamp(keyValue(text, "\ndisplay=", v.display), 0, 2);
+    // Older settings.ini files contain display=0 because windowed mode used to be the default.
+    // Honor a saved mode only when the user explicitly chose one in the current version.
+    v.displayExplicit = keyValue(text, "\ndisplay_user_set=", 0) != 0;
+    v.display = v.displayExplicit
+        ? std::clamp(keyValue(text, "\ndisplay=", v.display), 0, 2)
+        : 2;
     v.widescreen = keyValue(text, "\nwidescreen=", v.widescreen) != 0;
     v.paintings = std::clamp(keyValue(text, "\npainted_rooms=", keyValue(text, "\nzoom_paintings=", 0) ? 2 : v.paintings), 0, 2);
     v.renderScale = std::clamp(keyValue(text, "\nrender_scale=", v.renderScale), 25, 400);
@@ -3374,7 +3382,7 @@ void adjustVideo(App& app, int row, int dir) {
         v.height = kResolutions[i][1];
         break;
     }
-    case 1: v.display = (v.display + dir + 3) % 3; break;
+    case 1: v.display = (v.display + dir + 3) % 3; v.displayExplicit = true; break;
     case 2: v.widescreen = !v.widescreen; break;
     case 3: v.paintings = (v.paintings + dir + 3) % 3; break;
     case 4: stepChoice(v.renderScale, kRenderScales, int(sizeof kRenderScales / sizeof kRenderScales[0]), dir); break;
@@ -19180,9 +19188,6 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
     app->gameThread = SDL_GetCurrentThreadID();
     app->inputCancel.start(SDL_GetWindowID(app->window));
     SDL_Log("renderer: %s", app->renderer.description().c_str());
-    // Captures and tests start from the original presentation; the command line can change it
-    videoArgs(*app, argc, argv);
-    applyVideo(*app);
     SDL_Log("data: %s", app->dataDir.c_str());
 
     if (app->vitaOnly) // the archive's files, by their iOS names (.gxt as .mct)
@@ -19570,6 +19575,7 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
             setSceneSkip(app, crinput::HeldSource::Keyboard, true);
         if (event->key.key == SDLK_F11 && !event->key.repeat) {
             app.video.display = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_FULLSCREEN) ? 0 : 2;
+            app.video.displayExplicit = true;
             applyVideo(app);
             saveMix(app);
             break;
