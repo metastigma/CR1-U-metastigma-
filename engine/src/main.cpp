@@ -231,7 +231,7 @@ struct App {
     // the screen's height, native resolution, no MSAA, vsync
     struct Video {
         int width = 1024, height = 768;    // window size (windowed) or display mode (fullscreen)
-        int display = 0;                   // 0 windowed, 1 fullscreen (that mode), 2 borderless (the desktop's)
+        int display = 2;                   // 0 windowed, 1 fullscreen (that mode), 2 borderless (the desktop's)
         bool widescreen = false;           // the screen widens to the window (up to 21:9); else 4:3
         int paintings = 0;                 // painted rooms: 0 the original's (2x, a screen-sized window following
                                            // the player), 1 the whole painting at the screen's height, 2 at its width
@@ -18927,7 +18927,7 @@ void videoArgs(App& app, int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const char* a = argv[i];
         const char* next = i + 1 < argc ? argv[i + 1] : nullptr;
-        if (SDL_strcmp(a, "--original") == 0) v = App::Video();
+        if (SDL_strcmp(a, "--original") == 0) { v = App::Video(); v.display = 0; }
         else if (SDL_strcmp(a, "--resolution") == 0 && next) {
             int w = 0, h = 0;
             if (SDL_sscanf(next, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240) {
@@ -19088,6 +19088,9 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
     if (const char* hm = SDL_getenv("CR_HD_MODELS")) app->modelsDir = hm;
     else app->modelsDir = cr::modelsFolder("hd");
     if (!app->modelsDir.empty() && app->modelsDir.back() != '/') app->modelsDir += '/';
+    // As with textures/hd, discover a populated models/hd folder and enable it on first run.
+    // loadMix() below still lets an explicit hd_models=0 in settings.ini disable replacements.
+    if (isDir(app->modelsDir)) app->video.hdModels = true;
     if (app->dataDir.empty()) {
         const std::vector<std::string> g = cr::gameFolders();
 #ifdef SDL_PLATFORM_ANDROID
@@ -19221,10 +19224,6 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--language") == 0) languageArg = SDL_atoi(argv[i + 1]);
     if (languageArg >= 0) app->language = languageArg;
     applyLanguage(*app);
-    {
-        cr::Image wi;
-        if (loadImage(*app, "window_hd.mct", wi, &app->androidWindow)) app->windowTex = app->renderer.upload(wi), noteWindowAtlas(*app, wi);
-    }
     std::sort(app->textures.begin(), app->textures.end());
     std::sort(app->models.begin(), app->models.end());
     std::sort(app->maps.begin(), app->maps.end());
@@ -19387,6 +19386,13 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--battle-speed") == 0) app->battleSpeed = std::clamp(SDL_atoi(argv[i + 1]), 1, 5);
     }
     applyVideo(*app);
+    // Load the window atlas only after settings.ini has restored hd_textures. Previously this
+    // happened before loadMix(), so the first upload ignored HD replacements until toggled in Options.
+    {
+        cr::Image wi;
+        if (loadImage(*app, "window_hd.mct", wi, &app->androidWindow))
+            app->windowTex = app->renderer.upload(wi), noteWindowAtlas(*app, wi);
+    }
     if (languageArg >= 0) { // the command line wins over settings.ini
         app->language = languageArg;
         applyLanguage(*app);
