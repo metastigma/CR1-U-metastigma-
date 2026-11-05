@@ -9627,7 +9627,10 @@ void drawNpcs(App& app, const cr::Mat4& vp) {
         cr::Mat4 world; // (as a frame between the game's steps shows it)
         float alpha;
         shownNpc(app, d, world, alpha);
-        if (puzzle::shownCrystal(app, d.index)) world = puzzle::spinCrystalWorld(world, app.crystalSpin);
+        // c111 is the field's ordinary warp crystal; the puzzle has its own crystal NPCs.
+        // Rotate the model around its local vertical axis without changing its world position.
+        if (d.model == "c111.bin" || puzzle::shownCrystal(app, d.index))
+            world = puzzle::spinCrystalWorld(world, app.crystalSpin);
         drawLoaded(app, lm, vp * world, nullptr, alpha, matAnim ? d.time : -1.0f);
     }
 }
@@ -12753,7 +12756,9 @@ void drawFrame(App& app, bool present = true) {
     const Uint64 now = app.clock.ticksNS();
     const float realDt = std::min(app.lastTicks && now >= app.lastTicks ? float(double(now - app.lastTicks) * 1e-9) : 0.0f, 0.1f);
     app.lastTicks = now;
-    if (app.mode == Mode::Maps && app.puzzle.stage >= 0) {
+    // Field warp points (c111) and the puzzle's WarpCrystalNG / WarpCrystalWS share this
+    // render-time phase. It must advance outside puzzle rooms too: those crystals are field NPCs.
+    if (app.mode == Mode::Maps && !app.battle.active) {
         constexpr float kCrystalRadiansPerSecond = 2.2f; // one full turn in about 2.86 seconds
         app.crystalSpin = std::fmod(app.crystalSpin + realDt * kCrystalRadiansPerSecond, 6.2831853071795864769f);
     }
