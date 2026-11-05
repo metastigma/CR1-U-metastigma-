@@ -9593,6 +9593,23 @@ const cr::Action* effectMaterialAction(const LoadedModel& lm, const cr::Material
 bool effectUvMotion(const LoadedModel& lm, const cr::Material* mt, float time, float shift[2], float scale[2], int unit = 0);
 const cr::Texture* secondUnit(const LoadedModel& lm, size_t mesh, const cr::Material* mt, float time, float uv2[4]);
 
+// c111.bin is one skinned mesh: node 2 owns the platform, while node 3 owns
+// the crystal (confirmed from c111.glb's JOINTS_0 / WEIGHTS_0). Apply the
+// extra yaw in node 3's local rotation so the platform remains stationary.
+void spinCrystalBone(cr::NodePose& pose, float angle) {
+    const float c = std::cos(angle), s = std::sin(angle);
+    float x[3], z[3];
+    for (int r = 0; r < 3; ++r) {
+        x[r] = pose.cols[0][r];
+        z[r] = pose.cols[2][r];
+    }
+    // Post-multiply the current local rotation by Ry(angle).
+    for (int r = 0; r < 3; ++r) {
+        pose.cols[0][r] = c * x[r] - s * z[r];
+        pose.cols[2][r] = s * x[r] + c * z[r];
+    }
+}
+
 void drawNpcs(App& app, const cr::Mat4& vp) {
     for (auto& d : app.npcDraws) {
         if (d.alpha <= 0.001f) continue;
@@ -9604,9 +9621,20 @@ void drawNpcs(App& app, const cr::Mat4& vp) {
             return ap >= 0 && ap < int(m.materials.size()) ? &m.materials[size_t(ap)] : nullptr;
         };
         const bool posed = !m.skeleton.nodes.empty() && lm.meshes.size() == m.meshes.size();
+        const bool fieldWarpCrystal = d.model == "c111.bin";
         if (posed || (matAnim && lm.meshes.size() == m.meshes.size())) { // skin this instance; scroll its textures
             const cr::Action* act = d.action >= 0 && d.action < int(lm.actions.size()) ? &lm.actions[d.action] : nullptr;
-            if (posed) cr::computeWorld(m.skeleton, act, d.time, lm.world);
+            if (posed) {
+                // In c111 the crystal is joint 3, parented to platform joint 2.
+                // The checked GLB has 12 joints and node 3 -> node 2 in this skeleton.
+                if (fieldWarpCrystal && m.skeleton.nodes.size() > 3 && m.skeleton.nodes[3].parent == 2) {
+                    cr::computeLocalPoses(m.skeleton, act, d.time, lm.localPose);
+                    spinCrystalBone(lm.localPose[3], app.crystalSpin);
+                    cr::computeWorldFromLocalPoses(m.skeleton, lm.localPose, lm.world);
+                } else {
+                    cr::computeWorld(m.skeleton, act, d.time, lm.world);
+                }
+            }
             for (size_t i = 0; i < m.meshes.size(); ++i) {
                 float shift[2] = {0, 0}, scale[2] = {1, 1};
                 const bool moves = matAnim && effectUvMotion(lm, matOf(i), d.time, shift, scale);
@@ -9629,7 +9657,9 @@ void drawNpcs(App& app, const cr::Mat4& vp) {
         shownNpc(app, d, world, alpha);
         // c111 is the field's ordinary warp crystal; the puzzle has its own crystal NPCs.
         // Rotate the model around its local vertical axis without changing its world position.
-        if (d.model == "c111.bin" || puzzle::shownCrystal(app, d.index))
+        // Puzzle crystals retain their existing whole-object spin; c111's field
+        // crystal has already been rotated through its dedicated skeleton joint.
+        if (!fieldWarpCrystal && puzzle::shownCrystal(app, d.index))
             world = puzzle::spinCrystalWorld(world, app.crystalSpin);
         drawLoaded(app, lm, vp * world, nullptr, alpha, matAnim ? d.time : -1.0f);
     }
