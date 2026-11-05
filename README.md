@@ -76,10 +76,10 @@ the program - it finds it by itself. The game folder is:
 │   └── <the 1.1.1 APK>.apk             (or its classes.dex: the OBB's table is in it)
 ├── vita/
 │   └── PCSG00497/                      the installed title: CR1/resources/cr1.psarc, CR1/sound/*.psarc
-└── textures/
-    ├── export/                         written by --export-textures: the pictures to upscale (<hash>.crraw)
-    └── hd/                             read by the game: the upscaled pictures (<hash>.crhd)
-├── font/                               optional .ttf / .otf / .ttc files for the game's text
+├── textures/
+│   ├── export/                         written by --export-textures: the pictures to upscale (<hash>.crraw)
+│   └── hd/                             read by the game: the upscaled pictures (<hash>.crhd)
+└── font/                               optional .ttf / .otf / .ttc files for the game's text
 ```
 
 A release's folder may hold the release itself or have it one or two folders down, as above
