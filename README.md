@@ -91,9 +91,9 @@ goes in it.
 
 For the game's text, place your own `.ttf`, `.otf` or `.ttc` files in `font/` beside the executable.
 Open **Options → Game → Font** and use Left / Right to choose a file; the choice is saved in
-`settings.ini`. The game no longer searches Windows or other system font folders. Japanese,
-Chinese and Korean require CJK glyphs in the selected font; without a usable local font, the
-built-in bitmap font is used.
+`settings.ini`. **Text Size** adjusts TrueType text from 80% to 200% (default 125%). The game no
+longer searches Windows or other system font folders. Japanese, Chinese and Korean require CJK
+glyphs in the selected font; without a usable local font, the built-in bitmap font is used.
 
 With several, **the iOS copy is the game and the others add to it**: the Vita's voices, ATRAC9
 music, scripts in eight languages and lossless art, the Android release's sharper textures and its

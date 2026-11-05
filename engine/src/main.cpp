@@ -261,6 +261,7 @@ struct App {
     std::string fontDir, fontSelection;
     std::vector<std::string> fontFiles;
     int fontIndex = -1;
+    int fontScale = 125;                  // percent; slightly larger default for TrueType text
     std::vector<std::vector<int>> dialogueVoices; // per page: voice clips it starts (0x1e)
     int dialogueSerial = 0, voicedSerial = -1, voicedPage = -1; // which page's voices were started
     std::vector<int> voiceQueue;           // further clips of the same page
@@ -713,6 +714,7 @@ struct App {
     int playerFadeFrames = 0, playerFadeLeft = 0;
     cr::Vec3 puzzleStart;                  // where the leader came into the puzzle room (FieldPCCtrl::reset)
     struct CrystalCam { int npc = -1; int phase = 0; } crystalCam; // Uty_WarpCrystalCamera: 0 to the crystal, 1 back
+    float crystalSpin = 0;                // render-time phase, independent of the 20 Hz simulation
     bool puzzleStartPending = false;
     int bgmNo = 0;                         // G+0x35530: the music last asked for (Uty_GetBgmNo)
     struct NowLoading { bool on = false; int frame = 0; } nowLoading; // NowLoadProc's spinner
@@ -1951,6 +1953,13 @@ bool selectFontFile(App& app, const std::string& name) {
     return false;
 }
 
+void applyFontScale(App& app) {
+    const float scale = float(std::clamp(app.fontScale, 80, 200)) / 100.0f;
+    for (cr::Hud* h : {&app.dialogueHud, &app.promptHud, &app.itemHud, &app.choiceHud, &app.nameHud,
+                       &app.pageHud, &app.battleHud}) h->setFontScale(scale);
+    for (cr::Hud& h : app.lineHud) h.setFontScale(scale);
+}
+
 std::string itemName(const App& app, int item) {
     std::vector<std::vector<std::string>> name;
     if (app.systemText.message(cr::itemNameId(item), app.language, nullptr, name) && !name.empty() && !name[0].empty())
@@ -3123,6 +3132,7 @@ void loadMix(App& app) {
             while (*end && *end != '\r' && *end != '\n') ++end;
             if (end > at) selectFontFile(app, std::string(at, end));
         }
+        if (const char* at = SDL_strstr(text, "font_scale=")) app.fontScale = std::clamp(SDL_atoi(at + 11), 80, 200);
         applyLanguage(app);
         loadVideo(app, text);
         app.voiceEntries.clear();
@@ -3140,6 +3150,7 @@ void loadMix(App& app) {
             app.mix.effects, app.mix.voice, app.voiceEntries.size(), settingsPath().c_str());
     app.sound.setVoiceEntries(app.voiceEntries);
     applyMix(app);
+    applyFontScale(app);
 }
 
 void saveMix(const App& app) {
@@ -3167,7 +3178,7 @@ void saveMix(const App& app) {
                               (app.padConfirmEast ? "east" : "south") + "\n" + "field_speed=" + std::to_string(app.fieldSpeed) +
                               "\nbattle_speed=" + std::to_string(app.battleSpeed) + "\n";
     const std::string all = t + "language=" + std::to_string(app.language) + "\nfont=" + app.fontSelection +
-                            "\nvoice_entries=" + list + "\n" + video;
+                            "\nfont_scale=" + std::to_string(app.fontScale) + "\nvoice_entries=" + list + "\n" + video;
     std::string error;
     if (!crstorage::replaceFile(settingsPath(), all, &error)) SDL_Log("settings: %s", error.c_str());
 }
@@ -3571,6 +3582,15 @@ std::vector<OptRow> optionRows(App& app, int page) {
         rows.back().hint = app.fontFiles.empty()
                                ? "No local fonts found. Put .ttf, .otf or .ttc files in font/ beside the game."
                                : "Left / Right: choose a font file from font/ beside the game. The choice is saved.";
+        value("Text Size", std::to_string(app.fontScale) + "%", [&app](int dir) {
+            const int next = std::clamp(app.fontScale + (dir ? dir : 1) * 10, 80, 200);
+            if (next == app.fontScale) return;
+            app.fontScale = next;
+            applyFontScale(app);
+            saveMix(app);
+        });
+        rows.back().enabled = app.font.loaded();
+        rows.back().hint = "TrueType font size: 80% to 200%, in 10% steps. Default: 125%.";
         onOff(sysLabel(app, 58108, "Environment Effects"), &app.environmentEffects, nullptr);
         onOff(sysLabel(app, 58109, "Lock Screen Orientation"), &app.lockOrientation,
               [&app] { applyOrientation(app, app.lockOrientation); });
@@ -8747,26 +8767,27 @@ void reset(App& app) {
     pz.scene = 2;
 }
 
-// WarpCrystalNG / WarpCrystalWS have no action clip in the port; rotate their NPC transform
-// around Y at the normal 20 Hz scene tick.
-void stepCrystalRotation(App& app) {
-    constexpr float kRadiansPerFrame = 0.04f; // one turn in about 7.9 seconds
-    constexpr float kTwoPi = 6.2831853071795864769f;
-    for (const App::Puzzle::Obj& o : app.puzzle.objs) {
-        if (o.type != cr::kTypeCrystal || !o.shown || o.npc < 0 || o.npc >= int(app.npcs.size())) continue;
-        cr::FieldNpc& n = app.npcs[size_t(o.npc)];
-        n.angle = std::remainder(n.angle + kRadiansPerFrame, kTwoPi);
-        const cr::Mat4 world = npcWorld(n);
-        for (App::NpcDraw& d : app.npcDraws)
-            if (d.index == o.npc) d.world = world;
-    }
+// A shown WarpCrystalNG / WarpCrystalWS rotates around the vertical axis in the horizontal
+// plane. Apply this to the final render matrix, not the NPC state (which is simulation/interpolated).
+bool shownCrystal(const App& app, int npc) {
+    if (app.puzzle.stage < 0) return false;
+    for (const App::Puzzle::Obj& o : app.puzzle.objs)
+        if (o.npc == npc && o.type == cr::kTypeCrystal && o.shown) return true;
+    return false;
+}
+
+cr::Mat4 spinCrystalWorld(const cr::Mat4& world, float angle) {
+    cr::Mat4 spin;
+    const float c = std::cos(angle), s = std::sin(angle);
+    spin.m[0] = c; spin.m[2] = -s;
+    spin.m[8] = s; spin.m[10] = c;
+    return world * spin;
 }
 
 // One 20 Hz frame (PuzzleManager::update, under PuzzleScene::update)
 void step(App& app) {
     App::Puzzle& pz = app.puzzle;
     if (pz.stage < 0) return;
-    stepCrystalRotation(app); // keep portals moving during scene fades, scripts and dialogue
     if (pz.scene == 2) { // fading out to the reset
         if (app.fadeT < app.fadeFrames) return;
         const cr::Vec3 start = app.puzzleStart;
@@ -9606,6 +9627,7 @@ void drawNpcs(App& app, const cr::Mat4& vp) {
         cr::Mat4 world; // (as a frame between the game's steps shows it)
         float alpha;
         shownNpc(app, d, world, alpha);
+        if (puzzle::shownCrystal(app, d.index)) world = puzzle::spinCrystalWorld(world, app.crystalSpin);
         drawLoaded(app, lm, vp * world, nullptr, alpha, matAnim ? d.time : -1.0f);
     }
 }
@@ -12731,6 +12753,10 @@ void drawFrame(App& app, bool present = true) {
     const Uint64 now = app.clock.ticksNS();
     const float realDt = std::min(app.lastTicks && now >= app.lastTicks ? float(double(now - app.lastTicks) * 1e-9) : 0.0f, 0.1f);
     app.lastTicks = now;
+    if (app.mode == Mode::Maps && app.puzzle.stage >= 0) {
+        constexpr float kCrystalRadiansPerSecond = 2.2f; // one full turn in about 2.86 seconds
+        app.crystalSpin = std::fmod(app.crystalSpin + realDt * kCrystalRadiansPerSecond, 6.2831853071795864769f);
+    }
     if (app.mode == Mode::Maps && !app.booting && !app.titleOpen && (app.havePlayer || app.battle.active))
         app.playSeconds += realDt;
     // Field Speed / Battle Speed: the battles, and the field while the player walks it, faster
@@ -16204,17 +16230,17 @@ int runSelfTest(App& app) {
             auto draw = std::find_if(app.npcDraws.begin(), app.npcDraws.end(),
                                      [&](const App::NpcDraw& d) { return d.index == o.npc; });
             if (draw == app.npcDraws.end()) continue;
-            constexpr float kTwoPi = 6.2831853071795864769f;
-            const float beforeAngle = app.npcs[size_t(o.npc)].angle;
             const cr::Mat4 beforeWorld = draw->world;
-            puzzle::stepCrystalRotation(app);
-            crystalSpins = std::fabs(std::remainder(app.npcs[size_t(o.npc)].angle - beforeAngle, kTwoPi)) > 1e-4f &&
-                             !same(beforeWorld, draw->world);
+            const cr::Mat4 spunWorld = puzzle::spinCrystalWorld(beforeWorld, 0.5f);
+            crystalSpins = puzzle::shownCrystal(app, o.npc) && !same(beforeWorld, spunWorld) &&
+                           std::fabs(spunWorld.m[12] - beforeWorld.m[12]) < 1e-5f &&
+                           std::fabs(spunWorld.m[13] - beforeWorld.m[13]) < 1e-5f &&
+                           std::fabs(spunWorld.m[14] - beforeWorld.m[14]) < 1e-5f;
             break;
         }
         const bool roomFlag = app.game.flag(3300), clearFlag = app.game.flag(3000);
         problems += !sceneRan || (!crystal && !clearFlag) || !crystalSpins;
-        std::printf("puzzle crystal: shown %s, vertical spin %s\n", crystal ? "yes" : "no",
+        std::printf("puzzle crystal: shown %s, horizontal-plane spin transform %s\n", crystal ? "yes" : "no",
                     crystalSpins ? "yes" : "NO");
         app.lastTicks = 0;
         drawFrame(app, false);
