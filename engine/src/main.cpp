@@ -434,7 +434,7 @@ struct App {
     int resumeCursor = 0;
     cr::SaveData resumeData;
     vitaimport::Session saveImport;
-    std::string saveDirOverride;           // tests: where save.dat / resume.dat go
+    std::string saveDirOverride;           // portable saves/ beside the EXE (CR_SAVE_DIR overrides for tests)
     bool trackerArmed = false;             // G+0x34e1d: the Progress Tracker saves from the second scene's end on
     // A controller, as the Vita's buttons (its manual, 56000 / 56025): the D-pad / left stick move
     // and pick, ○ confirms, × cancels (the Japanese release's; padConfirmEast false swaps them), △
@@ -3109,12 +3109,27 @@ void applyMix(App& app) {
     app.sound.setVolumes(m * app.mix.effects / 100.0f, m * app.mix.voice / 100.0f);
 }
 
-// The user's folder - or CR_SAVE_DIR's (tests and captures keep everything of theirs there)
+// Portable settings: settings.ini beside the executable. Tests can isolate them with CR_SAVE_DIR.
 std::string userDir() {
-    if (const char* sd = SDL_getenv("CR_SAVE_DIR"); sd && *sd) return std::string(sd) + (sd[SDL_strlen(sd) - 1] == '/' ? "" : "/");
-    return cr::saveDir();
+    if (const char* sd = SDL_getenv("CR_SAVE_DIR"); sd && *sd) {
+        std::string path = sd;
+        if (!path.empty() && path.back() != '/' && path.back() != '\\') path += '/';
+        return path;
+    }
+    const char* base = SDL_GetBasePath();
+    std::string path = base ? base : "./";
+    if (!path.empty() && path.back() != '/' && path.back() != '\\') path += '/';
+    return path;
 }
 std::string settingsPath() { return userDir() + "settings.ini"; }
+
+// Every slot, the resume point and imported Vita saves use the same local folder.
+// CR_SAVE_DIR is an exact directory override for tests; otherwise use <exe>/saves/.
+std::string saveDirectory(const App& app) {
+    if (!app.saveDirOverride.empty()) return app.saveDirOverride;
+    if (const char* sd = SDL_getenv("CR_SAVE_DIR"); sd && *sd) return userDir();
+    return userDir() + "saves/";
+}
 
 void loadVideo(App& app, const char* text);
 
@@ -3498,7 +3513,7 @@ std::string sysLabel(const App& app, int id, const char* fallback) {
 
 void saveImportAnswer(App& app, bool yes) {
     const bool finished = app.saveImport.state == vitaimport::Session::Result && app.saveImport.succeeded;
-    app.saveImport.answer(yes, app.saveDirOverride.empty() ? cr::saveDir() : app.saveDirOverride);
+    app.saveImport.answer(yes, saveDirectory(app));
     if (finished) {
         app.optionsOpen = false;
         app.trackerArmed = false;
@@ -4195,7 +4210,7 @@ void optionsClick(App& app, float px, float py) {
 // ---- Saves (SaveData_Save / ContData_Save, the Camp menu, __menuu_SaveLoad*) ----
 
 std::string savePath(const App& app, const char* file) {
-    return (app.saveDirOverride.empty() ? cr::saveDir() : app.saveDirOverride) + file;
+    return saveDirectory(app) + file;
 }
 
 cr::SaveData captureSave(const App& app) {
@@ -19079,10 +19094,17 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
         else if (!given && a.empty() && !app->vitaOnly && !app->androidOnly) // (found in android/: used, not written to settings.ini)
             if (const std::string f = found("android", androidThere); !f.empty() && openAndroid(*app, f)) app->androidPath.clear();
     }
-    if (const char* sd = SDL_getenv("CR_SAVE_DIR")) { // save.dat / resume.dat elsewhere (tests)
+    // Player slots and the resume point are stored in <exe>/saves/.
+    // CR_SAVE_DIR remains an exact directory override for isolated tests/captures.
+    if (const char* sd = SDL_getenv("CR_SAVE_DIR"); sd && *sd) {
         app->saveDirOverride = sd;
-        if (!app->saveDirOverride.empty() && app->saveDirOverride.back() != '/') app->saveDirOverride += '/';
+        if (app->saveDirOverride.back() != '/' && app->saveDirOverride.back() != '\\') app->saveDirOverride += '/';
+    } else {
+        app->saveDirOverride = userDir() + "saves/";
     }
+    if (!isDir(app->saveDirOverride) && !SDL_CreateDirectory(app->saveDirOverride.c_str()))
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Could not create saves directory %s: %s",
+                    app->saveDirOverride.c_str(), SDL_GetError());
     // the HD textures: textures/hd/ in the game folder (CR_HD_TEXTURES elsewhere); the older
     // hd-textures/ beside the program or in the profile folder while there is no textures/hd/
     bool hdBundled = false;
