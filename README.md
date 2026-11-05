@@ -22,6 +22,8 @@ cmake --build build
 build/chaosrings
 ```
 
+**F11** toggles borderless fullscreen. Press F11 again to return to the configured window size.
+
 C++17 and SDL3 (downloaded and built by CMake when it isn't installed); Vulkan 1.3 by default,
 OpenGL 3.3 / ES 3.0 with `--renderer gl` or when Vulkan can't start. See [Platforms](#platforms) for Windows, macOS
 and Android.
@@ -77,6 +79,7 @@ the program - it finds it by itself. The game folder is:
 └── textures/
     ├── export/                         written by --export-textures: the pictures to upscale (<hash>.crraw)
     └── hd/                             read by the game: the upscaled pictures (<hash>.crhd)
+├── font/                               optional .ttf / .otf / .ttc files for the game's text
 ```
 
 A release's folder may hold the release itself or have it one or two folders down, as above
@@ -85,6 +88,12 @@ installed; the names of the folders below `ios/`, `android/` and `vita/` don't m
 has to be the installed, decrypted title (an encrypted NoNpDrm dump: install it first, e.g. with
 Vita3K). The release downloads come with these folders made, each with a `README.txt` saying what
 goes in it.
+
+For the game's text, place your own `.ttf`, `.otf` or `.ttc` files in `font/` beside the executable.
+Open **Options → Game → Font** and use Left / Right to choose a file; the choice is saved in
+`settings.ini`. The game no longer searches Windows or other system font folders. Japanese,
+Chinese and Korean require CJK glyphs in the selected font; without a usable local font, the
+built-in bitmap font is used.
 
 With several, **the iOS copy is the game and the others add to it**: the Vita's voices, ATRAC9
 music, scripts in eight languages and lossless art, the Android release's sharper textures and its

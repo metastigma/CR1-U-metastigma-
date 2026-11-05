@@ -257,7 +257,10 @@ struct App {
     std::string modelsDir;                 // replacement models: models/hd/ in the game folder, or CR_HD_MODELS
     int hdModelsLoaded = 0;                // since startup
     int language = 1;                      // text language (cr::kLanguageName): English by default
-    cr::Font font;                         // system font for the game's text (all languages)
+    cr::Font font;                         // selected face from the local font/ folder
+    std::string fontDir, fontSelection;
+    std::vector<std::string> fontFiles;
+    int fontIndex = -1;
     std::vector<std::vector<int>> dialogueVoices; // per page: voice clips it starts (0x1e)
     int dialogueSerial = 0, voicedSerial = -1, voicedPage = -1; // which page's voices were started
     std::vector<int> voiceQueue;           // further clips of the same page
@@ -903,6 +906,17 @@ SDL_EnumerationResult SDLCALL collectAssets(void* user, const char*, const char*
     else if (endsWith(fname, ".mca")) app.animFiles.push_back(fname);
     else if (endsWith(fname, ".cmp")) app.maps.push_back(fname);
     else if (endsWith(fname, ".bin") && isModelFile(app, fname)) app.models.push_back(fname);
+    return SDL_ENUM_CONTINUE;
+}
+
+SDL_EnumerationResult SDLCALL collectFontFiles(void* user, const char*, const char* fname) {
+    App& app = *static_cast<App*>(user);
+    if (!endsWith(fname, ".ttf") && !endsWith(fname, ".otf") && !endsWith(fname, ".ttc"))
+        return SDL_ENUM_CONTINUE;
+    SDL_PathInfo info{};
+    const std::string path = app.fontDir + fname;
+    if (SDL_GetPathInfo(path.c_str(), &info) && info.type == SDL_PATHTYPE_FILE)
+        app.fontFiles.push_back(path);
     return SDL_ENUM_CONTINUE;
 }
 
@@ -1918,6 +1932,23 @@ void applyLanguage(App& app) {
     if (!languageUsable(app, app.language)) app.language = 1;
     static const char* const kRegion[cr::kLanguages] = {"JP", "JP", "JP", "JP", "JP", "SC", "TC", "KR"};
     app.font.selectRegion(kRegion[app.language]);
+}
+
+std::string fontFileName(const std::string& path) {
+    const size_t slash = path.find_last_of("/\\");
+    return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+bool selectFontFile(App& app, const std::string& name) {
+    for (size_t i = 0; i < app.fontFiles.size(); ++i) {
+        if (fontFileName(app.fontFiles[i]) != name) continue;
+        if (app.font.path() != app.fontFiles[i] && !app.font.load(app.fontFiles[i])) return false;
+        app.fontIndex = int(i);
+        app.fontSelection = name;
+        applyLanguage(app);
+        return true;
+    }
+    return false;
 }
 
 std::string itemName(const App& app, int item) {
@@ -3086,6 +3117,12 @@ void loadMix(App& app) {
         for (int i = 0; i < 4; ++i)
             if (const char* at = SDL_strstr(text, keys[i])) *fields[i] = std::clamp(SDL_atoi(at + SDL_strlen(keys[i])), 0, 100);
         if (const char* at = SDL_strstr(text, "language=")) app.language = std::clamp(SDL_atoi(at + 9), 0, cr::kLanguages - 1);
+        if (const char* at = SDL_strstr(text, "font=")) {
+            at += 5;
+            const char* end = at;
+            while (*end && *end != '\r' && *end != '\n') ++end;
+            if (end > at) selectFontFile(app, std::string(at, end));
+        }
         applyLanguage(app);
         loadVideo(app, text);
         app.voiceEntries.clear();
@@ -3129,7 +3166,8 @@ void saveMix(const App& app) {
                               std::to_string(int(app.lockLandscapeFlipped)) + "\n" + "vita=" + app.vitaPath + "\n" + "android=" + app.androidPath + "\n" + "pad_confirm=" +
                               (app.padConfirmEast ? "east" : "south") + "\n" + "field_speed=" + std::to_string(app.fieldSpeed) +
                               "\nbattle_speed=" + std::to_string(app.battleSpeed) + "\n";
-    const std::string all = t + "language=" + std::to_string(app.language) + "\nvoice_entries=" + list + "\n" + video;
+    const std::string all = t + "language=" + std::to_string(app.language) + "\nfont=" + app.fontSelection +
+                            "\nvoice_entries=" + list + "\n" + video;
     std::string error;
     if (!crstorage::replaceFile(settingsPath(), all, &error)) SDL_Log("settings: %s", error.c_str());
 }
@@ -3524,6 +3562,15 @@ std::vector<OptRow> optionRows(App& app, int page) {
             applyLanguage(app);
             saveMix(app);
         });
+        value("Font", app.fontSelection.empty() ? "Bitmap" : app.fontSelection, [&app](int dir) {
+            if (app.fontFiles.empty()) return;
+            const int next = wrap(app.fontIndex + (dir ? dir : 1), app.fontFiles.size());
+            if (selectFontFile(app, fontFileName(app.fontFiles[size_t(next)]))) saveMix(app);
+        });
+        rows.back().enabled = !app.fontFiles.empty();
+        rows.back().hint = app.fontFiles.empty()
+                               ? "No local fonts found. Put .ttf, .otf or .ttc files in font/ beside the game."
+                               : "Left / Right: choose a font file from font/ beside the game. The choice is saved.";
         onOff(sysLabel(app, 58108, "Environment Effects"), &app.environmentEffects, nullptr);
         onOff(sysLabel(app, 58109, "Lock Screen Orientation"), &app.lockOrientation,
               [&app] { applyOrientation(app, app.lockOrientation); });
@@ -8700,10 +8747,26 @@ void reset(App& app) {
     pz.scene = 2;
 }
 
+// WarpCrystalNG / WarpCrystalWS have no action clip in the port; rotate their NPC transform
+// around Y at the normal 20 Hz scene tick.
+void stepCrystalRotation(App& app) {
+    constexpr float kRadiansPerFrame = 0.04f; // one turn in about 7.9 seconds
+    constexpr float kTwoPi = 6.2831853071795864769f;
+    for (const App::Puzzle::Obj& o : app.puzzle.objs) {
+        if (o.type != cr::kTypeCrystal || !o.shown || o.npc < 0 || o.npc >= int(app.npcs.size())) continue;
+        cr::FieldNpc& n = app.npcs[size_t(o.npc)];
+        n.angle = std::remainder(n.angle + kRadiansPerFrame, kTwoPi);
+        const cr::Mat4 world = npcWorld(n);
+        for (App::NpcDraw& d : app.npcDraws)
+            if (d.index == o.npc) d.world = world;
+    }
+}
+
 // One 20 Hz frame (PuzzleManager::update, under PuzzleScene::update)
 void step(App& app) {
     App::Puzzle& pz = app.puzzle;
     if (pz.stage < 0) return;
+    stepCrystalRotation(app); // keep portals moving during scene fades, scripts and dialogue
     if (pz.scene == 2) { // fading out to the reset
         if (app.fadeT < app.fadeFrames) return;
         const cr::Vec3 start = app.puzzleStart;
@@ -16135,8 +16198,24 @@ int runSelfTest(App& app) {
         for (int f = 0; f < 3; ++f) stepEvents(app); // the crystal shows the frame after
         bool crystal = false;
         for (const App::Puzzle::Obj& o : pz.objs) crystal |= o.type == cr::kTypeCrystal && o.shown;
+        bool crystalSpins = false;
+        for (const App::Puzzle::Obj& o : pz.objs) {
+            if (o.type != cr::kTypeCrystal || !o.shown || o.npc < 0 || o.npc >= int(app.npcs.size())) continue;
+            auto draw = std::find_if(app.npcDraws.begin(), app.npcDraws.end(),
+                                     [&](const App::NpcDraw& d) { return d.index == o.npc; });
+            if (draw == app.npcDraws.end()) continue;
+            constexpr float kTwoPi = 6.2831853071795864769f;
+            const float beforeAngle = app.npcs[size_t(o.npc)].angle;
+            const cr::Mat4 beforeWorld = draw->world;
+            puzzle::stepCrystalRotation(app);
+            crystalSpins = std::fabs(std::remainder(app.npcs[size_t(o.npc)].angle - beforeAngle, kTwoPi)) > 1e-4f &&
+                             !same(beforeWorld, draw->world);
+            break;
+        }
         const bool roomFlag = app.game.flag(3300), clearFlag = app.game.flag(3000);
-        problems += !sceneRan || (!crystal && !clearFlag);
+        problems += !sceneRan || (!crystal && !clearFlag) || !crystalSpins;
+        std::printf("puzzle crystal: shown %s, vertical spin %s\n", crystal ? "yes" : "no",
+                    crystalSpins ? "yes" : "NO");
         app.lastTicks = 0;
         drawFrame(app, false);
         const int errs = app.renderer.takeErrors();
@@ -18844,6 +18923,7 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
         if (!s.empty() && s.back() != '/') s += '/';
         return s;
     }();
+    app->fontDir = beside + "font/";
     auto isDir = [](const std::string& p) {
         SDL_PathInfo info;
         return SDL_GetPathInfo(p.c_str(), &info) && info.type == SDL_PATHTYPE_DIRECTORY;
@@ -19050,9 +19130,24 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
         for (const std::string& n : app->android.names()) collectAssets(app, nullptr, n.c_str());
     else SDL_EnumerateDirectory(app->dataDir.c_str(), collectAssets, app);
     app->systemText.load(app->dataDir);
-    // The game's text in every language: a system font (CR_FONT overrides), else the 8x8 font
-    if (cr::loadSystemFont(app->font)) SDL_Log("font: %s", app->font.path().c_str());
-    else SDL_Log("no CJK font found (set CR_FONT): Japanese, Chinese and Korean text unavailable");
+    // Local fonts only: font/*.ttf, *.otf and *.ttc beside the executable. Never search OS font folders.
+    SDL_PathInfo fontDirInfo{};
+    if (SDL_GetPathInfo(app->fontDir.c_str(), &fontDirInfo) && fontDirInfo.type == SDL_PATHTYPE_DIRECTORY)
+        SDL_EnumerateDirectory(app->fontDir.c_str(), collectFontFiles, app);
+    std::sort(app->fontFiles.begin(), app->fontFiles.end());
+    const std::vector<std::string> fontCandidates = app->fontFiles;
+    app->fontFiles.clear();
+    cr::Font fontProbe;
+    for (const std::string& path : fontCandidates)
+        if (fontProbe.load(path)) app->fontFiles.push_back(path);
+    if (!app->fontFiles.empty()) {
+        selectFontFile(*app, fontFileName(app->fontFiles.front()));
+        SDL_Log("font: %s", app->font.path().c_str());
+    } else {
+        app->fontSelection.clear();
+        app->fontIndex = -1;
+        SDL_Log("font/: no usable .ttf/.otf/.ttc; using the built-in bitmap font");
+    }
     // (the options menu is the engine's own, column-aligned for the 8x8 font)
     for (cr::Hud* h : {&app->dialogueHud, &app->promptHud, &app->itemHud, &app->choiceHud, &app->nameHud,
                        &app->pageHud, &app->battleHud})
@@ -19406,6 +19501,12 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
         // The X key must be observed before battle/menu handlers can consume the event.
         if (event->key.key == SDLK_X && !event->key.repeat && app.mode == Mode::Maps && app.runner.running())
             setSceneSkip(app, crinput::HeldSource::Keyboard, true);
+        if (event->key.key == SDLK_F11 && !event->key.repeat) {
+            app.video.display = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_FULLSCREEN) ? 0 : 2;
+            applyVideo(app);
+            saveMix(app);
+            break;
+        }
         if (app.vitaLogo.phase) { // the Vita's logos: confirm cuts the hold short
             const SDL_Keycode k = event->key.key;
             if (app.vitaLogo.phase == 2 && (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE || k == SDLK_E || k == SDLK_ESCAPE))
