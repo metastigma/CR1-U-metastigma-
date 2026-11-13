@@ -13,6 +13,16 @@ positions, formula constants) where the port needs them.
 
 Licence: GPL-2.0-or-later (`LICENSE`); the bundled libraries keep their own (`THIRD_PARTY.md`).
 
+## Russian localization — Chaos Rings (first game)
+
+The Russian fan localization of the original *Chaos Rings* (2010) has been released for **iPad and PlayStation Vita**. The links below refer specifically to the first game, not *Chaos Rings Omega* or *Chaos Rings II*.
+
+- [Chaos Rings (first game) — iPad release announcement](https://t.me/ChaosRingsRus/13)
+- [Chaos Rings (first game) — PS Vita release listing](https://4pda.to/forum/index.php?showtopic=771459&st=3280)
+- [4PDA — iPad release announcement](https://4pda.to/forum/index.php?showtopic=948934&st=1360)
+- [Telegram — Chaos Rings Rus](https://t.me/ChaosRingsRus)
+- [VK — Chaos Rings translation community](https://vk.com/club224211635)
+
 ## Quick start
 
 ```sh
