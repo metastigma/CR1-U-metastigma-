@@ -89,7 +89,7 @@ void MenuPainter::picture(int pict, float x, float y, float alpha) {
 }
 
 void MenuPainter::stretch(int pict, float x, float y, float w, float h, float alpha) {
-    if (pict < 0 || pict >= kNumMenuPictures || !r_ || !sheet_ || !sheet_->id || alpha <= 0.001f) return;
+    if (pict < 0 || pict >= 156 || !r_ || !sheet_ || !sheet_->id || alpha <= 0.001f) return;
     const short* p = kMenuPicture[pict];
     if (!clipY_) {
         r_->drawQuadUV(*sheet_, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale,
