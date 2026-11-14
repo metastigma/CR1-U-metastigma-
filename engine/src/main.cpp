@@ -5881,13 +5881,13 @@ void drawGeneRow(App& app, cr::MenuPainter& m, float x, float y, int plate, bool
 }
 
 void drawGeneAbilityRow(App& app, cr::MenuPainter& m, float x, float y, int it, int ch, bool lit, float a) {
-    (void)ch;
     drawCampRow(app, m, x, y, it, 0, lit, a);
-    // A known gene action also shows its MP cost beside the name.
+    if (cr::isSkill(it)) return;
     const cr::BattleActionDef* action = app.battleActions.get(cr::geneAction(it));
     if (!action) return;
+    const int cost = ch >= 0 && ch < cr::kCharacters && cr::hasSkill(app.game, ch, 132) ? action->mp / 2 : action->mp;
     m.picture(27, x + 188, y + 34, a);
-    drawShopNumber(m, action->mp, x + 218, y + 30, 3, 10, a, 2);
+    drawShopNumber(m, cost, x + 218, y + 30, 3, 10, a, 0);
 }
 
 void drawCampScrollBar(cr::MenuPainter& m, float scroll, int n, float a) {
