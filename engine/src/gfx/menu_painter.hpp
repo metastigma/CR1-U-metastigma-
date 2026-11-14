@@ -19,6 +19,7 @@ public:
         r_ = &r;
         sheet_ = &sheet;
         font_ = font;
+        clipY_ = false;
     }
     void release(Renderer& r); // the cached text
     // Everything drawn after this is scaled by k about (x, y) (our denser Options pages draw
@@ -29,6 +30,11 @@ public:
     // Outside all that: the whole menu scaled by k and moved to (x, y) (fitting the iPad's 512 x 384
     // menus into the iPhone layout's screen)
     void setFit(float x, float y, float k) { fx_ = x; fy_ = y; fk_ = k; }
+    // Draw a single clean outline around text. Disabled by default; callers enable it only
+    // for the original Help board, leaving ordinary menu labels unchanged.
+    void setOutline(bool on) { outline_ = on; }
+    void setClip(float y0, float y1) { clipY_ = true; clipTop_ = Y(y0) * 2.0f; clipBottom_ = Y(y1) * 2.0f; }
+    void clearClip() { clipY_ = false; }
 
     // A piece of window_hd at (x, y): its sheet rectangle in menu units (u, v, w, h)
     void piece(float x, float y, float u, float v, float w, float h, float alpha = 1, float r = 1, float g = 1, float b = 1);
@@ -39,12 +45,17 @@ public:
     void image(const Texture& tex, float x, float y, float w, float h, float alpha = 1);
     // A w x h piece of another texture, in its own (logical) pixels, at (x, y)
     void imagePiece(const Texture& tex, float x, float y, float u, float v, float w, float h, float alpha = 1);
+    // ... the texture's (u, v, uw, vh) drawn w x h menu units (a sheet with more pixels than units)
+    void imagePieceTo(const Texture& tex, float x, float y, float w, float h, float u, float v, float uw, float vh,
+                      float alpha = 1, float r = 1, float g = 1, float b = 1);
     // Sheet-0 picture `pict` (kMenuPicture) at (x, y) (MuComPictDraw)
     void picture(int pict, float x, float y, float alpha = 1);
     // ... stretched to w x h
     void stretch(int pict, float x, float y, float w, float h, float alpha = 1);
     // Plain colour quad, colours per left / right edge (tex2d_add4 on slot 45)
     void quad(float x, float y, float w, float h, const float* left, const float* right);
+    // Battle HP / MP bars: a parallelogram whose top edge leans right.
+    void slant(float x, float y, float w, float h, float lean, const float* left, const float* right);
     // Text with its top-left at (x, y), 14 units high; dark = black (style 1), else white
     void text(const std::string& s, float x, float y, bool dark, float alpha = 1, float size = 14);
     float textWidth(const std::string& s, float size = 14);
@@ -73,6 +84,7 @@ public:
     // ComUty_CmdBack type 1 (the shop's): a plain 232-wide bar, white fading in over 24 at each end,
     // "Back" at x + 82
     void backBar(float x, float y, bool pressed, float alpha);
+    void backOkBar(float x, float y, int pressed, float alpha);
     // The 14 x 14 digits of sheet 0 (0 at (0, 0), then every 14 units) and "/" (picture 66)
     void digit(int d, float x, float y, float alpha = 1);
 
@@ -86,11 +98,31 @@ private:
     const Font* font_ = nullptr;
     struct Cached {
         Texture tex;
-        float w = 0, h = 0, density = 0; // logical size, texture pixels per logical pixel
+        Texture edgeTex; // the dilated glyph alpha, drawn once behind the face
+        float w = 0, h = 0, density = 0; // glyph bounds in logical pixels
+        float pad = 0; // transparent border (logical pixels) surrounding both cached textures
         int generation = -1;
     };
     std::map<std::string, Cached> text_;
     Texture white_;
+    bool outline_ = false;
+    bool clipY_ = false;
+    float clipTop_ = 0, clipBottom_ = 768;
+    bool clipVertical(float& y, float& h, float& v, float& vh) const {
+        if (!clipY_) return true;
+        if (h <= 0) return false;
+        const float originalY = y, originalH = h;
+        const float top = originalY < clipTop_ ? clipTop_ : originalY;
+        const float bottom = originalY + originalH > clipBottom_ ? clipBottom_ : originalY + originalH;
+        if (bottom <= top) return false;
+        const float first = (top - originalY) / originalH;
+        const float last = (bottom - originalY) / originalH;
+        v += vh * first;
+        vh *= last - first;
+        y = top;
+        h = bottom - top;
+        return true;
+    }
     Cached& rasterise(const std::string& s, float size);
 };
 
