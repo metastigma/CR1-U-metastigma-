@@ -422,6 +422,7 @@ struct App {
         int listCursor = 0, listTop = 0;
         int plate = 0, plateCursor = 0, plateTop = 0;
         int pendingPlate = 0;               // Equip: selected plate awaiting the original Yes / No prompt
+        bool inspectOnlyPlate = false;       // Equip: the fixed Human Genes slot opens an info/list view only
         int member = 0;                    // the pair's first or second
         int slot = 0, slotTop = 0;         // Equip: seven scrolling slots
         int count = 1, confirm = 0;        // Items: how many seeds, Yes / No
@@ -5579,7 +5580,14 @@ void campOpenEntries(App& app, int plate) {
 }
 void campCloseEntries(App& app) {
     App::Camp& c = app.camp;
-    c.plate = 0; c.phase = App::Camp::List; c.anim = 0; c.animClock = 0;
+    c.plate = 0; c.anim = 0; c.animClock = 0;
+    if (c.inspectOnlyPlate) {
+        c.inspectOnlyPlate = false;
+        c.phase = App::Camp::Slot;
+        c.listCursor = c.listTop = 0;
+        return;
+    }
+    c.phase = App::Camp::List;
     c.listCursor = c.plateCursor; c.listTop = c.plateTop; campRefreshList(app);
 }
 void campBack(App& app) {
@@ -5672,10 +5680,18 @@ void campChoose(App& app) {
     case App::Camp::Equip:
         if (c.phase == App::Camp::Member) { menuSound(app, se::kChoose); c.phase = App::Camp::Slot; c.slot = 0; }
         else if (c.phase == App::Camp::Slot) {
+            if (c.slot == 3) {
+                const int ch = campCharacter(app, c.member);
+                const int human = app.game.party[size_t(ch)].genes[0];
+                if (!cr::isPlate(human)) { menuSound(app, se::kBuzzer); return; }
+                c.inspectOnlyPlate = true;
+                menuSound(app, se::kChoose);
+                campOpenEntries(app, human);
+                return;
+            }
             c.listCursor = c.listTop = 0;
             campRefreshList(app);
-            if (c.list.empty()) { // the Human Genes, or nothing to wear
-                if (c.slot == 3) campMessage(app, sysText(app, 58064));
+            if (c.list.empty()) {
                 menuSound(app, se::kBuzzer);
                 return;
             }
@@ -5710,6 +5726,10 @@ void campChoose(App& app) {
                 c.phase = App::Camp::Ask;
             }
         } else if (c.phase == App::Camp::Entries && c.slot >= 3 && cr::isPlate(c.plate)) {
+            if (c.inspectOnlyPlate) {
+                menuSound(app, se::kChoose);
+                return;
+            }
             app.game.party[size_t(campCharacter(app,c.member))].genes[c.slot-3]=c.plate; menuSound(app,campui::kSoundEquip); c.plate=0; c.phase=App::Camp::Slot;
         } else if (c.phase == App::Camp::List && !c.list.empty()) {
             int& worn = app.game.party[size_t(campCharacter(app, c.member))].equip[c.slot];
@@ -5912,7 +5932,8 @@ void drawCampEquipSlotRow(App& app, cr::MenuPainter& m, float x, float y, const 
                           int slot, bool lit, float a) {
     const int worn = slot < 3 ? pm.equip[size_t(slot)] : pm.genes[size_t(slot - 3)];
     m.picture(lit ? 9 : 8, x, y, a);
-    if (const cr::ItemParam* p = app.itemTable.item(worn); p && p->icon >= 0)
+    const int iconItem = worn > 0 ? worn : (slot >= 4 ? cr::kFirstPlate : 0);
+    if (const cr::ItemParam* p = app.itemTable.item(iconItem); p && p->icon >= 0)
         m.piece(x + 12, y + 8, float(p->icon % 16) * 32, 248 + float(p->icon / 16) * 32, 32, 32, a);
     const std::string name = worn > 0 ? itemName(app, worn) : sysText(app, 58061 + slot);
     if (worn > 0) m.textTint(name, x + 56, y + 12, 1, 1, 0.25f, a, 14);
