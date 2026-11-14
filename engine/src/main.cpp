@@ -5537,6 +5537,8 @@ void campRefreshList(App& app) {
     App::Camp& c = app.camp;
     if (c.phase == App::Camp::Entries) c.list = campKnownEntries(app, c.plate);
     else if (c.page == App::Camp::Items) c.list = campItems(app, c.category);
+    else if (c.page == App::Camp::Equip && c.slot == 3 && c.inspectOnlyPlate)
+        c.list = {cr::kFirstPlate, cr::kFirstPlate + 1}; // fixed Human Genes browser: Warrior / Mage
     else if (c.page == App::Camp::Equip) c.list = campEquipList(app, campCharacter(app, c.member), c.slot);
     else if (c.page == App::Camp::Genes) { c.list.clear(); for (int p = cr::kFirstPlate; p < cr::kFirstPlate + cr::kPlates; ++p) if (ownedCount(app,p)>0) c.list.push_back(p); }
     c.listCursor = std::clamp(c.listCursor, 0, std::max(0, int(c.list.size()) - 1));
@@ -5626,7 +5628,15 @@ void campBack(App& app) {
             return;
         }
         if (c.phase == App::Camp::Entries) { campCloseEntries(app); return; }
-        if (c.phase == App::Camp::List) { c.phase = App::Camp::Slot; return; }
+        if (c.phase == App::Camp::List) {
+            if (c.slot == 3 && c.inspectOnlyPlate) {
+                c.inspectOnlyPlate = false;
+                c.list.clear();
+                c.listCursor = c.listTop = 0;
+            }
+            c.phase = App::Camp::Slot;
+            return;
+        }
         if (c.phase == App::Camp::Slot) { c.phase = App::Camp::Member; return; }
         c.page = App::Camp::Main;
         c.anim = 0;
@@ -5699,12 +5709,14 @@ void campChoose(App& app) {
         if (c.phase == App::Camp::Member) { menuSound(app, se::kChoose); c.phase = App::Camp::Slot; c.slot = 0; }
         else if (c.phase == App::Camp::Slot) {
             if (c.slot == 3) {
-                const int ch = campCharacter(app, c.member);
-                const int human = app.game.party[size_t(ch)].genes[0];
-                if (!cr::isPlate(human)) { menuSound(app, se::kBuzzer); return; }
+                const int human = app.game.party[size_t(campCharacter(app, c.member))].genes[0];
+                if (!campHumanPlate(human)) { menuSound(app, se::kBuzzer); return; }
                 c.inspectOnlyPlate = true;
+                c.list = {cr::kFirstPlate, cr::kFirstPlate + 1};
+                c.listCursor = human == cr::kFirstPlate + 1 ? 1 : 0;
+                c.listTop = 0;
+                c.phase = App::Camp::List;
                 menuSound(app, se::kChoose);
-                campOpenEntries(app, human);
                 return;
             }
             c.listCursor = c.listTop = 0;
@@ -5735,6 +5747,11 @@ void campChoose(App& app) {
             menuSound(app, campui::kSoundEquip);
             c.phase = App::Camp::Slot;
         } else if (c.phase == App::Camp::List && !c.list.empty() && c.slot >= 3) {
+            if (c.slot == 3 && c.inspectOnlyPlate) {
+                if (!campHumanPlate(item)) menuSound(app, se::kBuzzer);
+                else menuSound(app, se::kChoose); // selection previews the plate; it never equips/replaces Human Genes
+                return;
+            }
             if (!cr::isPlate(item) || ownedCount(app, item) <= 0) {
                 menuSound(app, se::kBuzzer);
             } else {
@@ -14633,6 +14650,8 @@ int mobileInputSelfTest(App& app) {
     const std::vector<int> expectedMage{82, 84, 86, 132, 134, 136};
     problems += campPlateDisplayEntries(479) != expectedWarrior ||
                 campPlateDisplayEntries(480) != expectedMage;
+    problems += campKnownEntries(app, 479) != expectedWarrior ||
+                campKnownEntries(app, 480) != expectedMage;
     // These reserve records stay in game data; the board only presents its six visible entries.
     const auto& fullWarrior = cr::plateContents(479);
     const auto& fullMage = cr::plateContents(480);
