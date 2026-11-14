@@ -5983,9 +5983,10 @@ void drawGeneRow(App& app, cr::MenuPainter& m, float x, float y, int plate, bool
     m.picture(lit ? 9 : 8, x, y, a);
     if (const cr::ItemParam* p = app.itemTable.item(plate); p && p->icon >= 0)
         m.piece(x + 12, y + 8, float(p->icon % 16) * 32, 248 + float(p->icon / 16) * 32, 32, 32, a);
-    const int known = cr::plateLearned(app.game, plate);
-    int total = 0;
-    for (int e : cr::plateContents(plate)) total += e > 0;
+    const std::vector<int> entries = campPlateDisplayEntries(plate);
+    const int known = int(std::count_if(entries.begin(), entries.end(),
+                                        [&](int entry) { return ownedCount(app, entry) > 0; }));
+    const int total = int(entries.size());
     const std::string name = itemName(app, plate);
     if (worn) m.textTint(name, x + 56, y + 12, 1, 1, 0.25f, a, 14);
     else if (known == 0) m.textTint(name, x + 56, y + 12, 0.6f, 0.6f, 0.6f, a, 14);
