@@ -415,17 +415,20 @@ struct App {
     cr::Texture charSelectArt;
     struct Camp {                          // the Camp menu's page and cursors (__menuu_CampMain*)
         enum Page { Main, Items, Equip, Status, Genes } page = Main;
-        enum Phase { List, Member, Slot, Ask } phase = List; // Status: Slot = the member's details
+        enum Phase { List, Member, Slot, Ask, Entries } phase = List; // Entries: known skills on a gene plate
         int cursor = 0;                    // Main: the plate
         int category = 0;                  // Items: campui::kCategoryKind index
         std::vector<int> list;
         int listCursor = 0, listTop = 0;
+        int plate = 0, plateCursor = 0, plateTop = 0;
         int member = 0;                    // the pair's first or second
-        int slot = 0;                      // Equip: weapon, armor, jewel, Human Genes, gene plates 1-3
+        int slot = 0, slotTop = 0;         // Equip: seven scrolling slots
         int count = 1, confirm = 0;        // Items: how many seeds, Yes / No
         std::string message;
         int messageFrames = 0;
         int anim = 0;
+        float animClock = 0, scroll = 0;
+        int scrollKey = -1;
         std::array<cr::Texture, 22> plateArt; // gene_m*c.mct, loaded when a board first shows them
     } camp;
     struct CampPointer {
@@ -5249,6 +5252,8 @@ constexpr int kCategoryKind[6] = {14, 3, 6, 7, 8, 10};         // make_item_list
 constexpr int kCategoryLabel[6] = {58071, 58072, 58073, 58074, 58075, 58079}; // (0xc8640)
 constexpr float kRowX = 192, kRowY = 92, kRowH = 48;
 constexpr int kRows = 4;
+constexpr float kFocusY = 150, kListTop = 76, kListBottom = 280;
+constexpr float kGaugeX = 456, kGaugeY = 72, kGaugeH = 208;
 constexpr float kBackX = 192, kBackY = 344;
 constexpr float kPhoneBackY = 286; // 2.2.0's (__MuCamp_NextProc's box (192, 286, 256, 34)); it has no Save plate
 // kanIconNoTbl (0xc8740): a plate word's icon + 1
@@ -5406,20 +5411,62 @@ float campEase(const App& app) {
     const float t = std::min(1.0f, float(app.camp.anim) / 8.0f);
     return 1 - (1 - t) * (1 - t);
 }
-float campSlotY(const App& app, int slot) {
-    return app.renderer.phoneLayout() ? 76 + 29.0f * slot : 84 + 34.0f * slot;
+bool campSlotList(const App& app) { return app.camp.page == App::Camp::Equip && app.camp.phase == App::Camp::Slot; }
+bool campScrollable(const App& app) {
+    return campSlotList(app) || ((app.camp.page == App::Camp::Items || app.camp.page == App::Camp::Equip ||
+                                  app.camp.page == App::Camp::Genes) &&
+                                 (app.camp.phase == App::Camp::List || app.camp.phase == App::Camp::Entries));
 }
-float campSlotScale(const App& app) { return app.renderer.phoneLayout() ? 0.65f : 0.7f; }
+int campScrollCount(const App& app) { return campSlotList(app) ? campui::kEquipSlots : int(app.camp.list.size()); }
+int campFocus(const App& app) { return campSlotList(app) ? app.camp.slot : app.camp.listCursor; }
+int campScrollKey(const App& app) {
+    const App::Camp& c = app.camp;
+    return int(c.page) * 10000000 + int(c.phase) * 1000000 + c.category * 10000 + c.member * 1000 +
+           (c.phase == App::Camp::Entries ? c.plate : 0);
+}
+float campScrollPx(const App& app) {
+    return app.camp.scrollKey == campScrollKey(app) ? app.camp.scroll : campui::kRowH * float(campFocus(app));
+}
+int campVisualFocus(const App& app) {
+    const int n = campScrollCount(app);
+    return n > 0 ? std::clamp(int((campScrollPx(app) + 28.0f) / campui::kRowH), 0, n - 1) : 0;
+}
+float campScrollThumbLength(int n) {
+    return n > 0 ? std::max(24.0f, std::floor((campui::kGaugeH - 24.0f) * 2.0f / float(n))) : 24.0f;
+}
+float campScrollThumbOffset(float scroll, int n) {
+    if (n <= 2) return 0;
+    const float len = campScrollThumbLength(n);
+    return std::clamp(std::floor((196.0f - len) * scroll / (campui::kRowH * float(n - 2))),
+                      0.0f, campui::kGaugeH - 24.0f - len + 10.0f);
+}
+void campScrollTo(App& app, int index, bool jump = false) {
+    if (!campScrollable(app)) return;
+    App::Camp& c = app.camp;
+    int& cursor = campSlotList(app) ? c.slot : c.listCursor;
+    int& top = campSlotList(app) ? c.slotTop : c.listTop;
+    const int n = campScrollCount(app);
+    if (n <= 0) return;
+    const int next = std::clamp(index, 0, n - 1), before = cursor;
+    cursor = next; top = next;
+    if (before != next) menuSound(app, se::kCursor);
+    if (jump) c.scroll = campui::kRowH * float(next), c.scrollKey = campScrollKey(app);
+}
+void campScrollBy(App& app, int rows) { if (campScrollable(app)) campScrollTo(app, campFocus(app) + rows); }
+void stepCampScroll(App& app, float dt) {
+    if (!app.campOpen || !campScrollable(app)) return;
+    App::Camp& c = app.camp;
+    const int key = campScrollKey(app);
+    const float target = campui::kRowH * float(campFocus(app));
+    if (c.scrollKey != key || std::fabs(target - c.scroll) > campui::kRowH) {
+        c.scrollKey = key; c.scroll = target; return;
+    }
+    const float amount = 160.0f * std::clamp(dt, 0.0f, 0.1f);
+    if (c.scroll < target) c.scroll = std::min(target, c.scroll + amount);
+    else if (c.scroll > target) c.scroll = std::max(target, c.scroll - amount);
+}
 float campListX(const App& app) {
-    return campui::kRowX + (app.camp.page == App::Camp::Items ? 160 * (1 - campEase(app)) : 64);
-}
-void campScrollBy(App& app, int rows) {
-    auto& c = app.camp;
-    if (c.page == App::Camp::Main || c.phase != App::Camp::List) return;
-    const int before = c.listTop, most = std::max(0, int(c.list.size()) - campui::kRows);
-    c.listTop = std::clamp(c.listTop + rows, 0, most);
-    c.listCursor = std::clamp(c.listCursor, c.listTop, std::max(c.listTop, std::min(int(c.list.size()) - 1, c.listTop + campui::kRows - 1)));
-    if (before != c.listTop) menuSound(app, se::kCursor);
+    return campui::kRowX + (app.camp.page == App::Camp::Items ? 160 * (1 - campEase(app)) : 0);
 }
 
 int campEntries(const App& app) { return app.renderer.phoneLayout() ? campui::kEntries - 1 : campui::kEntries; }
@@ -5435,12 +5482,20 @@ void openCamp(App& app) {
     c.cursor = campEntries(app) - 1;
 }
 
+std::vector<int> campKnownEntries(const App& app, int plate) {
+    std::vector<int> out;
+    if (!cr::isPlate(plate)) return out;
+    for (int entry : cr::plateContents(plate)) if (entry > 0 && ownedCount(app, entry) > 0) out.push_back(entry);
+    return out;
+}
 void campRefreshList(App& app) {
     App::Camp& c = app.camp;
-    if (c.page == App::Camp::Items) c.list = campItems(app, c.category);
+    if (c.phase == App::Camp::Entries) c.list = campKnownEntries(app, c.plate);
+    else if (c.page == App::Camp::Items) c.list = campItems(app, c.category);
     else if (c.page == App::Camp::Equip) c.list = campEquipList(app, campCharacter(app, c.member), c.slot);
+    else if (c.page == App::Camp::Genes) { c.list.clear(); for (int p = cr::kFirstPlate; p < cr::kFirstPlate + cr::kPlates; ++p) if (ownedCount(app,p)>0) c.list.push_back(p); }
     c.listCursor = std::clamp(c.listCursor, 0, std::max(0, int(c.list.size()) - 1));
-    c.listTop = std::clamp(c.listTop, std::max(0, c.listCursor - campui::kRows + 1), c.listCursor);
+    c.listTop = c.listCursor;
 }
 
 // Items: the next category that holds anything, `dir` from the current (the current one too if 0)
@@ -5490,6 +5545,17 @@ void campOpenPage(App& app, int i) {
     }
 }
 
+void campOpenEntries(App& app, int plate) {
+    App::Camp& c = app.camp;
+    c.plate = plate; c.plateCursor = c.listCursor; c.plateTop = c.listTop;
+    c.phase = App::Camp::Entries; c.anim = 0; c.animClock = 0;
+    c.listCursor = c.listTop = 0; campRefreshList(app);
+}
+void campCloseEntries(App& app) {
+    App::Camp& c = app.camp;
+    c.plate = 0; c.phase = App::Camp::List; c.anim = 0; c.animClock = 0;
+    c.listCursor = c.plateCursor; c.listTop = c.plateTop; campRefreshList(app);
+}
 void campBack(App& app) {
     App::Camp& c = app.camp;
     menuSound(app, se::kBack);
@@ -5502,6 +5568,7 @@ void campBack(App& app) {
         else { c.page = App::Camp::Main; c.anim = 0; }
         return;
     case App::Camp::Equip:
+        if (c.phase == App::Camp::Entries) { campCloseEntries(app); return; }
         if (c.phase == App::Camp::List) { c.phase = App::Camp::Slot; return; }
         if (c.phase == App::Camp::Slot) { c.phase = App::Camp::Member; return; }
         c.page = App::Camp::Main;
@@ -5512,7 +5579,9 @@ void campBack(App& app) {
         c.page = App::Camp::Main;
         c.anim = 0;
         return;
-    case App::Camp::Genes: c.page = App::Camp::Main; c.anim = 0; return;
+    case App::Camp::Genes:
+        if (c.phase == App::Camp::Entries) { campCloseEntries(app); return; }
+        c.page = App::Camp::Main; c.anim = 0; c.animClock = 0; return;
     }
 }
 
@@ -5581,10 +5650,12 @@ void campChoose(App& app) {
             }
             menuSound(app, se::kChoose);
             c.phase = App::Camp::List;
-        } else if (c.phase == App::Camp::List && !c.list.empty() && c.slot >= 3) { // a gene plate
-            app.game.party[size_t(campCharacter(app, c.member))].genes[c.slot - 3] = item;
-            menuSound(app, campui::kSoundEquip);
-            c.phase = App::Camp::Slot;
+        } else if (c.phase == App::Camp::List && !c.list.empty() && c.slot >= 3) {
+            if (item == 0) { app.game.party[size_t(campCharacter(app,c.member))].genes[c.slot-3]=0; menuSound(app,campui::kSoundEquip); c.phase=App::Camp::Slot; }
+            else if (cr::plateLearned(app.game,item)==0) menuSound(app,se::kBuzzer);
+            else { menuSound(app,se::kChoose); campOpenEntries(app,item); }
+        } else if (c.phase == App::Camp::Entries && c.slot >= 3 && cr::isPlate(c.plate)) {
+            app.game.party[size_t(campCharacter(app,c.member))].genes[c.slot-3]=c.plate; menuSound(app,campui::kSoundEquip); c.plate=0; c.phase=App::Camp::Slot;
         } else if (c.phase == App::Camp::List && !c.list.empty()) {
             int& worn = app.game.party[size_t(campCharacter(app, c.member))].equip[c.slot];
             if (worn > 0) app.game.items[worn] = std::min(cr::kMaxItemCount, ownedCount(app, worn) + 1);
@@ -5597,7 +5668,10 @@ void campChoose(App& app) {
     case App::Camp::Status:
         if (c.phase == App::Camp::Member) { menuSound(app, se::kChoose); c.phase = App::Camp::Slot; }
         return;
-    case App::Camp::Genes: menuSound(app, se::kBuzzer); return; // browsing only: plates are worn from Equip
+    case App::Camp::Genes:
+        if (c.phase == App::Camp::List && !c.list.empty()) { const int p=c.list[size_t(c.listCursor)]; if(cr::plateLearned(app.game,p)==0){menuSound(app,se::kBuzzer);return;} menuSound(app,se::kChoose); campOpenEntries(app,p); }
+        else if(c.phase==App::Camp::Entries) menuSound(app,se::kChoose);
+        return;
     }
 }
 
@@ -5617,13 +5691,10 @@ void campKey(App& app, SDL_Keycode key) {
     case App::Camp::Items:
     case App::Camp::Equip:
     case App::Camp::Genes:
-        if (c.phase == App::Camp::List) {
+        if (c.phase == App::Camp::List || c.phase == App::Camp::Entries) {
             const int n = int(c.list.size());
-            if (step && n > 0) {
-                c.listCursor = (c.listCursor + step + n) % n;
-                c.listTop = std::clamp(c.listTop, std::max(0, c.listCursor - campui::kRows + 1), c.listCursor);
-                menuSound(app, se::kCursor);
-            } else if ((left || right) && c.page == App::Camp::Items) {
+            if (step && n > 0) campScrollBy(app, step);
+            else if ((left || right) && c.page == App::Camp::Items && c.phase == App::Camp::List) {
                 campNextCategory(app, left ? -1 : 1);
                 menuSound(app, se::kPage);
             }
@@ -5639,7 +5710,7 @@ void campKey(App& app, SDL_Keycode key) {
             return;
         }
         if (c.phase == App::Camp::Slot && c.page == App::Camp::Equip) {
-            if (step) { c.slot = (c.slot + step + campui::kEquipSlots) % campui::kEquipSlots; menuSound(app, se::kCursor); }
+            if (step) campScrollBy(app, step);
             return;
         }
         [[fallthrough]];
@@ -7260,6 +7331,17 @@ void drawCamp(App& app) {
     }
     const int ch = campCharacter(app, c.member);
     const int item = c.list.empty() ? 0 : c.list[size_t(c.listCursor)];
+    const float scroll = campScrollPx(app);
+    const int visualFocus = campVisualFocus(app);
+    auto scrollList = [&](float x, int n, auto&& row) {
+        m.setClip(kListTop, kListBottom);
+        for (int k = 0; k < n; ++k) {
+            const float y = kFocusY + kRowH * float(k) - scroll;
+            if (y + kRowH > kListTop && y < kListBottom) row(k, x, y, k == visualFocus);
+        }
+        m.clearClip();
+        drawCampScrollBar(m, int(std::floor(scroll / kRowH)), n, ease);
+    };
     auto memberPlates = [&](bool lit) {
         right();
         for (int k = 0; k < 2; ++k) {
@@ -7268,19 +7350,22 @@ void drawCamp(App& app) {
         }
         left();
     };
-    auto helpBoard = [&](int it) { // HELP: the item's text across the top (as the shop's)
+    auto helpBoard = [&](int it) { // ComUty_HelpWindowDraw: original 336 x 68 panel and HELP tag
         if (it <= 0) return;
         right();
-        const float hx = 152;
-        m.stretch(12, hx, 0, 512 - hx, 66, ease);
-        m.picture(18, hx + 4, 2, ease);
+        const float helpT = std::min(1.0f, float(c.anim) / 16.0f);
+        const float helpEase = 1 - (1 - helpT) * (1 - helpT);
+        const float slide = 480 * (1 - helpEase);
+        m.picture(17, 144 + slide, 8, helpEase);
+        m.picture(18, 144 + slide, -4, helpEase);
         std::vector<std::vector<std::string>> help;
         if (app.systemText.message(cr::itemHelpId(it), app.language, nullptr, help) && !help.empty()) {
-            float y = 20;
-            for (const std::string& line : help[0]) {
-                m.text(line, hx + 14, y, false, ease, 13);
-                if ((y += 16) > 52) break;
-            }
+            const int n = std::min(3, int(help[0].size()));
+            static const int kTop[4] = {0, 24, 18, 10};
+            m.setOutline(true);
+            for (int i = 0; i < n; ++i)
+                m.text(help[0][size_t(i)], 156 + slide, float(kTop[n] + 8 + 16 * i), true, helpEase, 13);
+            m.setOutline(true);
         }
         left();
     };
@@ -7290,13 +7375,12 @@ void drawCamp(App& app) {
             helpBoard(item);
             right();
             if (c.list.empty()) m.text("Nothing here.", kRowX + 56, kRowY + 16, false, ease, 15);
-            for (int k = 0; k < kRows && c.listTop + k < int(c.list.size()); ++k) {
-                const int index = c.listTop + k, it = c.list[size_t(index)];
+            scrollList(campListX(app), int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                const int it = c.list[size_t(k)];
                 const bool usable = campUsable(it);
-                drawCampRow(app, m, kRowX + 160 * (1 - ease), kRowY + kRowH * float(k), it, ownedCount(app, it),
-                            index == c.listCursor, usable || c.category != 0 ? ease : ease * 0.6f);
-            }
-            drawCampScrollBar(m, c.listTop, int(c.list.size()), ease);
+                drawCampRow(app, m, x, y, it, ownedCount(app, it), lit,
+                            usable || c.category != 0 ? ease : ease * 0.6f);
+            });
             left();
         } else {
             drawShopBoard(app, 12, 92, ch, 0, ease);
@@ -7322,13 +7406,11 @@ void drawCamp(App& app) {
         } else if (c.phase == App::Camp::Slot) {
             drawShopBoard(app, 12, 92, ch, 0, ease);
             right();
-            for (int k = 0; k < kEquipSlots; ++k) { // the rows at 70%: weapon, armor, jewel, the genes
-                const float rx = kRowX + 160 * (1 - ease) + 64, ry = campSlotY(app, k);
-                m.setScale(rx, ry, campSlotScale(app));
-                drawCampRow(app, m, rx, ry, k < 3 ? pm.equip[k] : pm.genes[k - 3], 0, c.slot == k, k == 3 ? ease * 0.7f : ease,
-                            sysText(app, 58061 + k));
-                m.setScale(0, 0, 1);
-            }
+            scrollList(kRowX, kEquipSlots, [&](int slot, float x, float y, bool lit) {
+                const int worn = slot < 3 ? pm.equip[size_t(slot)] : pm.genes[size_t(slot - 3)];
+                drawCampRow(app, m, x, y, worn, 0, lit, slot == 3 ? ease * 0.7f : ease,
+                            sysText(app, 58061 + slot), worn > 0);
+            });
             left();
         } else if (c.slot >= 3) { // a gene plate for the slot: its board beside the list
             drawGeneBoard(app, m, 12, 92, item > 0 ? item : pm.genes[c.slot - 3], ease);
@@ -7344,12 +7426,10 @@ void drawCamp(App& app) {
         } else {
             drawShopBoard(app, 12, 92, ch, item > 0 ? item : 0, ease);
             right();
-            for (int k = 0; k < kRows && c.listTop + k < int(c.list.size()); ++k) {
-                const int index = c.listTop + k, it = c.list[size_t(index)];
-                drawCampRow(app, m, kRowX + 64, kRowY + kRowH * float(k), it, it > 0 ? ownedCount(app, it) : 0,
-                            index == c.listCursor, ease);
-            }
-            drawCampScrollBar(m, c.listTop, int(c.list.size()), ease);
+            scrollList(campListX(app), int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                const int it = c.list[size_t(k)];
+                drawCampRow(app, m, x, y, it, it > 0 ? ownedCount(app, it) : 0, lit, ease);
+            });
             helpBoard(item);
         }
         break;
@@ -13189,7 +13269,8 @@ void drawFrame(App& app, bool present = true) {
         drawScenarios(app);
     }
     if (app.campOpen && !app.optionsOpen) {
-        ++app.camp.anim;
+        for (app.camp.animClock += dt; app.camp.animClock >= 1.0f / kFramesPerSecond; app.camp.animClock -= 1.0f / kFramesPerSecond) ++app.camp.anim;
+        stepCampScroll(app, dt);
         drawCamp(app);
     }
     if (app.mapScreen.open) {
