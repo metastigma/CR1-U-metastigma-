@@ -5514,7 +5514,7 @@ void openCamp(App& app) {
     c.cursor = campEntries(app) - 1;
 }
 
-// The Gene Board shows six positions: three abilities and three skills.
+// The Gene Board shows six visible entries from the selected plate.
 // The two reserve cells stay in the complete game-data table and combat logic.
 std::vector<int> campPlateDisplayEntries(int plate) {
     std::vector<int> out;
@@ -6021,8 +6021,8 @@ void drawCampScrollBar(App& app, cr::MenuPainter& m, float scroll, int n, float 
     m.piece(sx, y + 4 + at + len, 160, 212, 16, 8, a);
 }
 
-// ComUty_GeneBoardDraw at (x, y): the plate's name, its picture (gene_m*c.mct), "n / 6" known, then
-// its abilities and skills (unknown ones as ???)
+// ComUty_GeneBoardDraw at (x, y): the plate's name, picture (gene_m*c.mct), "n / 6" known,
+// and the entries visible for the selected plate.
 void drawGeneBoard(App& app, cr::MenuPainter& m, float x, float y, int plate, float a) {
     if (!cr::isPlate(plate)) return;
     const std::vector<int> entries = campPlateDisplayEntries(plate);
