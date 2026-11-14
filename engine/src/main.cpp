@@ -5880,6 +5880,16 @@ void drawGeneRow(App& app, cr::MenuPainter& m, float x, float y, int plate, bool
         for (int k = 0; k < total; ++k) m.picture(k < total - known ? 10 : 11, x + 251 - 14 * float(total) + 14 * float(k), y + 30, a);
 }
 
+void drawGeneAbilityRow(App& app, cr::MenuPainter& m, float x, float y, int it, int ch, bool lit, float a) {
+    (void)ch;
+    drawCampRow(app, m, x, y, it, 0, lit, a);
+    // A known gene action also shows its MP cost beside the name.
+    const cr::BattleActionDef* action = app.battleActions.get(cr::geneAction(it));
+    if (!action) return;
+    m.picture(27, x + 188, y + 34, a);
+    drawShopNumber(m, action->mp, x + 218, y + 30, 3, 10, a, 2);
+}
+
 void drawCampScrollBar(cr::MenuPainter& m, float scroll, int n, float a) {
     using namespace campui;
     if (n <= kRows) return;
@@ -7437,40 +7447,65 @@ void drawCamp(App& app) {
                             sysText(app, 58061 + slot), worn > 0);
             });
             left();
-        } else if (c.slot >= 3) { // a gene plate for the slot: its board beside the list
-            drawGeneBoard(app, m, 12, 92, item > 0 ? item : pm.genes[c.slot - 3], ease);
-            right();
-            for (int k = 0; k < kRows && c.listTop + k < int(c.list.size()); ++k) {
-                const int index = c.listTop + k, it = c.list[size_t(index)];
-                const bool worn = std::find(std::begin(pm.genes), std::end(pm.genes), it) != std::end(pm.genes);
-                if (cr::isPlate(it)) drawGeneRow(app, m, kRowX + 64, kRowY + kRowH * float(k), it, index == c.listCursor, worn, ease);
-                else drawCampRow(app, m, kRowX + 64, kRowY + kRowH * float(k), it, 0, index == c.listCursor, ease);
-            }
-            drawCampScrollBar(m, c.listTop, int(c.list.size()), ease);
+        } else if (c.phase == App::Camp::Entries && c.slot >= 3) {
+            // A plate's known genes/skills are a real submenu, not the plate-selection list.
+            drawGeneBoard(app, m, 12, 92, c.plate, ease);
             helpBoard(item);
+            right();
+            scrollList(kRowX, int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                drawGeneAbilityRow(app, m, x, y, c.list[size_t(k)], ch, lit, ease);
+            });
+            left();
+        } else if (c.slot >= 3) { // the gene-plate selection submenu
+            // Keep the full Omega row width and use the same four-row clipped scroll window.
+            drawGeneBoard(app, m, 12, 92, item, ease); // the removal row (0) has no plate preview
+            helpBoard(item);
+            right();
+            scrollList(kRowX, int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                const int it = c.list[size_t(k)];
+                const bool worn = std::find(std::begin(pm.genes), std::end(pm.genes), it) != std::end(pm.genes);
+                if (cr::isPlate(it)) drawGeneRow(app, m, x, y, it, lit, worn, ease);
+                else drawCampRow(app, m, x, y, it, 0, lit, ease);
+            });
+            left();
         } else {
             drawShopBoard(app, 12, 92, ch, item > 0 ? item : 0, ease);
-            right();
-            scrollList(campListX(app), int(c.list.size()), [&](int k, float x, float y, bool lit) {
-                const int it = c.list[size_t(k)];
-                drawCampRow(app, m, x, y, it, it > 0 ? ownedCount(app, it) : 0, lit, ease);
-            });
             helpBoard(item);
+            right();
+            scrollList(kRowX, int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                const int it = c.list[size_t(k)];
+                const bool worn = it > 0 && pm.equip[size_t(c.slot)] == it;
+                drawCampRow(app, m, x, y, it, it > 0 ? ownedCount(app, it) : 0, lit, ease, std::string(), worn);
+            });
+            left();
         }
         break;
     }
     case App::Camp::Genes:
-        drawGeneBoard(app, m, 14, 92, item, ease);
-        right();
-        if (c.list.empty()) m.text("No gene plates.", kRowX + 56, kRowY + 16, false, ease, 15);
-        for (int k = 0; k < kRows && c.listTop + k < int(c.list.size()); ++k) {
-            const int index = c.listTop + k, it = c.list[size_t(index)];
-            const cr::PartyMember& gm = app.game.party[size_t(ch)];
-            const bool worn = std::find(std::begin(gm.genes), std::end(gm.genes), it) != std::end(gm.genes);
-            if (cr::isPlate(it)) drawGeneRow(app, m, kRowX + 64, kRowY + kRowH * float(k), it, index == c.listCursor, worn, ease);
-            else drawCampRow(app, m, kRowX + 64, kRowY + kRowH * float(k), it, 0, index == c.listCursor, ease);
+        if (c.phase == App::Camp::Entries) {
+            // The selected plate stays on the left; its known abilities/skills use the same
+            // clipped four-row list, focus line, and scroll animation as every other submenu.
+            drawGeneBoard(app, m, 14, 92, c.plate, ease);
+            helpBoard(item);
+            right();
+            scrollList(kRowX, int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                drawGeneAbilityRow(app, m, x, y, c.list[size_t(k)], ch, lit, ease);
+            });
+            left();
+        } else {
+            drawGeneBoard(app, m, 14, 92, item, ease);
+            if (c.list.empty()) m.text("No gene plates.", kRowX + 56, kRowY + 16, false, ease, 15);
+            helpBoard(item);
+            right();
+            scrollList(kRowX, int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                const int it = c.list[size_t(k)];
+                const cr::PartyMember& gm = app.game.party[size_t(ch)];
+                const bool worn = std::find(std::begin(gm.genes), std::end(gm.genes), it) != std::end(gm.genes);
+                if (cr::isPlate(it)) drawGeneRow(app, m, x, y, it, lit, worn, ease);
+                else drawCampRow(app, m, x, y, it, 0, lit, ease);
+            });
+            left();
         }
-        drawCampScrollBar(m, c.listTop, int(c.list.size()), ease);
         break;
     case App::Camp::Status:
         if (c.phase == App::Camp::Member) {
@@ -7493,8 +7528,10 @@ void drawCamp(App& app) {
         break;
     default: break;
     }
-    const bool helpUp = c.phase == App::Camp::List && item > 0 &&
-                        (c.page == App::Camp::Items || c.page == App::Camp::Equip);
+    const bool helpUp = item > 0 &&
+                        ((c.phase == App::Camp::List && (c.page == App::Camp::Items || c.page == App::Camp::Equip ||
+                                                        c.page == App::Camp::Genes)) ||
+                         (c.phase == App::Camp::Entries && (c.page == App::Camp::Equip || c.page == App::Camp::Genes)));
     right();
     if (!helpUp) drawClockAndOz(app, m, 1); // the HELP board takes the top while it's up
     centre();
@@ -12593,6 +12630,7 @@ void drawBattleHud(App& app, float W, float H) {
 
     // The banner: the action's name, the target prompt, the messages
     r.setOrigin(r.uiX());
+    m.setOutline(false); // The original battle banner is plain; menu labels below use Omega's outline.
     if (b.bannerFrames > 0 && !b.banner.empty()) {
         const float clear[4] = {0, 0, 0, 0}, dark[4] = {0, 0, 0, 0x98 / 255.f};
         const float by = phone ? 32.0f : 0.0f;
@@ -12601,22 +12639,24 @@ void drawBattleHud(App& app, float W, float H) {
         m.quad(463, 4 + by, 24, 24, dark, clear);
         m.textCentred(b.banner, 287 - m.textWidth(b.banner, 14) / 2, 16 + by, false, 1, 14);
     }
+    m.setOutline(true);
 
     // Right: the menus
     r.setOrigin(phone ? r.uiX() : 2 * r.uiX());
     if (b.phase == App::Battle::Command && !app.optionsOpen) { // (Options covers them while it's up)
         // the HELP board across the top (ComUty_HelpWindowDraw): the item's or gene's target and effect
-        auto helpBoard = [&](int item) {
-            const float hx = 152;
-            m.stretch(12, hx, 0, 512 - hx, 66, a);
-            m.picture(18, hx + 4, 2, a);
+        auto helpBoard = [&](int item) { // Original battle HELP geometry and outlined text, as in Omega.
+            if (item <= 0) return;
+            m.picture(17, 160, 40, a);
+            m.picture(18, 160, 28, a);
             std::vector<std::vector<std::string>> help;
             if (app.systemText.message(cr::itemHelpId(item), app.language, nullptr, help) && !help.empty()) {
-                float hy = 20;
-                for (const std::string& line : help[0]) {
-                    m.text(line, hx + 14, hy, false, a, 13);
-                    if ((hy += 16) > 52) break;
-                }
+                const int n = std::min(3, int(help[0].size()));
+                static const int kTop[4] = {0, 24, 18, 10};
+                m.setOutline(true);
+                for (int i = 0; i < n; ++i)
+                    m.text(help[0][size_t(i)], 172, float(kTop[n] + 8 + 16 * i + 32), true, a, 13);
+                m.setOutline(true); // Keep the battle command, item and gene lists outlined.
             }
         };
         switch (b.menu) {
