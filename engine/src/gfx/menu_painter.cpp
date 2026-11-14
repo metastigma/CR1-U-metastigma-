@@ -290,9 +290,10 @@ void MenuPainter::gauge(float x, float y, int value, float alpha, bool highlight
         quad(x + 13, y + 6, 1, 2, blue, blue);
         quad(x + 14, y + 5, fill, 4, blue, blue);
     }
-    const float r = highlight ? 0xEB / 255.0f : 1, b = highlight ? 0x4B / 255.0f : 1;
+    // The knob sprite already contains its original green gradient. Keep its artwork
+    // untinted; the cyan accent is used by the selected label/bar, not the slider handle.
     const short* p = kMenuPicture[106];
-    piece(knob, y - 16, p[0], p[1], p[2], p[3], alpha, r, 1, b);
+    piece(knob, y - 16, p[0], p[1], p[2], p[3], alpha);
 }
 
 
@@ -314,7 +315,7 @@ void MenuPainter::backButton(float x, float y, bool pressed, int bob, float alph
 }
 
 void MenuPainter::backBar(float x, float y, bool pressed, float alpha) {
-    const float lime[4] = {0xEB / 255.0f, 1, 0x4B / 255.0f, alpha};
+    const float lime[4] = {0x4B / 255.0f, 1, 0xEB / 255.0f, alpha};
     const float white[4] = {1, 1, 1, alpha};
     const float* c = pressed ? lime : white;
     const float clear[4] = {c[0], c[1], c[2], 0};
