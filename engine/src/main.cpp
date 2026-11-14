@@ -19045,6 +19045,12 @@ void videoArgs(App& app, int argc, char** argv) {
 
 SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#if defined(SDL_PLATFORM_WINDOWS)
+    // SDL 3.2.0 enables RAWINPUT by default. While it is active, SDL skips
+    // its XInput device enumerator. Prefer the native XInput backend for
+    // wireless USB receivers that expose the controller through XInput.
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "0");
+#endif
     SDL_SetAppMetadata("Chaos Rings HD (reimplementation)", "0.1", "local.preservation.chaosrings");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_Init: %s", SDL_GetError());
