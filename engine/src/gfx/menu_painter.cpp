@@ -274,7 +274,7 @@ void MenuPainter::plate(float x, float y, int icon, int word, bool selected, flo
     else if (!text.empty()) textCentred(text, x + 40 + (88 - textWidth(text, 15)) / 2, y + 20, true, a, 15);
 }
 
-void MenuPainter::gauge(float x, float y, int value, float alpha, bool highlight) {
+void MenuPainter::gauge(float x, float y, int value, float alpha, bool /*highlight*/) {
     value = std::clamp(value, 0, 100);
     picture(103, x, y, alpha);
     for (int k = 0; k < 24; ++k) picture(105, x + 20 + 8 * k, y, alpha);
@@ -290,8 +290,8 @@ void MenuPainter::gauge(float x, float y, int value, float alpha, bool highlight
         quad(x + 13, y + 6, 1, 2, blue, blue);
         quad(x + 14, y + 5, fill, 4, blue, blue);
     }
-    // The knob sprite already contains its original green gradient. Keep its artwork
-    // untinted; the cyan accent is used by the selected label/bar, not the slider handle.
+    // The slider handle must remain neutral gray. Keep its atlas artwork untinted;
+    // the cyan accent belongs to the selected row, not the handle.
     const short* p = kMenuPicture[106];
     piece(knob, y - 16, p[0], p[1], p[2], p[3], alpha);
 }
