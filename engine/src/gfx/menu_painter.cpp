@@ -6,6 +6,7 @@
 #include "core/text.hpp"
 #include "game/stage_tables.hpp"
 #include "gfx/font.hpp"
+#include "gfx/font_outline.hpp"
 
 namespace cr {
 
@@ -14,32 +15,71 @@ constexpr float kScale = 2.0f; // menu units -> 1024x768 screen
 } // namespace
 
 void MenuPainter::release(Renderer& r) {
-    for (auto& [s, c] : text_) r.destroy(c.tex);
+    for (auto& [s, c] : text_) {
+        r.destroy(c.tex);
+        r.destroy(c.edgeTex);
+    }
     text_.clear();
     r.destroy(white_);
 }
 
 void MenuPainter::piece(float x, float y, float u, float v, float w, float h, float alpha, float r, float g, float b) {
     if (!r_ || !sheet_ || !sheet_->id || alpha <= 0.001f) return;
-    r_->drawQuadUV(*sheet_, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, u * kScale, v * kScale,
-                   w * kScale, h * kScale, r, g, b, alpha);
+    if (!clipY_) {
+        r_->drawQuadUV(*sheet_, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale,
+                       u * kScale, v * kScale, w * kScale, h * kScale, r, g, b, alpha);
+        return;
+    }
+    float dy = Y(y) * kScale, dh = h * K() * kScale, sv = v * kScale, sh = h * kScale;
+    if (!clipVertical(dy, dh, sv, sh)) return;
+    r_->drawQuadUV(*sheet_, X(x) * kScale, dy, w * K() * kScale, dh, u * kScale, sv, w * kScale, sh, r, g, b, alpha);
 }
 
 void MenuPainter::pieceTo(float x, float y, float w, float h, float u, float v, float uw, float vh, float alpha, float r,
                           float g, float b) {
     if (!r_ || !sheet_ || !sheet_->id || alpha <= 0.001f) return;
-    r_->drawQuadUV(*sheet_, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, u * kScale, v * kScale,
-                   uw * kScale, vh * kScale, r, g, b, alpha);
+    if (!clipY_) {
+        r_->drawQuadUV(*sheet_, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale,
+                       u * kScale, v * kScale, uw * kScale, vh * kScale, r, g, b, alpha);
+        return;
+    }
+    float dy = Y(y) * kScale, dh = h * K() * kScale, sv = v * kScale, sh = vh * kScale;
+    if (!clipVertical(dy, dh, sv, sh)) return;
+    r_->drawQuadUV(*sheet_, X(x) * kScale, dy, w * K() * kScale, dh, u * kScale, sv, uw * kScale, sh, r, g, b, alpha);
 }
 
 void MenuPainter::image(const Texture& tex, float x, float y, float w, float h, float alpha) {
     if (!r_ || !tex.id || alpha <= 0.001f) return;
-    r_->drawQuad(tex, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, 1, 1, 1, alpha);
+    if (!clipY_) {
+        r_->drawQuad(tex, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, 1, 1, 1, alpha);
+        return;
+    }
+    float dy = Y(y) * kScale, dh = h * K() * kScale, sv = 0, sh = float(tex.height);
+    if (!clipVertical(dy, dh, sv, sh)) return;
+    r_->drawQuadUV(tex, X(x) * kScale, dy, w * K() * kScale, dh, 0, sv, float(tex.width), sh, 1, 1, 1, alpha);
 }
 
 void MenuPainter::imagePiece(const Texture& tex, float x, float y, float u, float v, float w, float h, float alpha) {
     if (!r_ || !tex.id || alpha <= 0.001f) return;
-    r_->drawQuadUV(tex, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, u, v, w, h, 1, 1, 1, alpha);
+    if (!clipY_) {
+        r_->drawQuadUV(tex, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, u, v, w, h, 1, 1, 1, alpha);
+        return;
+    }
+    float dy = Y(y) * kScale, dh = h * K() * kScale, sv = v, sh = h;
+    if (!clipVertical(dy, dh, sv, sh)) return;
+    r_->drawQuadUV(tex, X(x) * kScale, dy, w * K() * kScale, dh, u, sv, w, sh, 1, 1, 1, alpha);
+}
+
+void MenuPainter::imagePieceTo(const Texture& tex, float x, float y, float w, float h, float u, float v, float uw, float vh,
+                               float alpha, float r, float g, float b) {
+    if (!r_ || !tex.id || alpha <= 0.001f) return;
+    if (!clipY_) {
+        r_->drawQuadUV(tex, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, u, v, uw, vh, r, g, b, alpha);
+        return;
+    }
+    float dy = Y(y) * kScale, dh = h * K() * kScale, sv = v, sh = vh;
+    if (!clipVertical(dy, dh, sv, sh)) return;
+    r_->drawQuadUV(tex, X(x) * kScale, dy, w * K() * kScale, dh, u, sv, uw, sh, r, g, b, alpha);
 }
 
 void MenuPainter::picture(int pict, float x, float y, float alpha) {
@@ -49,10 +89,17 @@ void MenuPainter::picture(int pict, float x, float y, float alpha) {
 }
 
 void MenuPainter::stretch(int pict, float x, float y, float w, float h, float alpha) {
-    if (pict < 0 || pict >= 156 || !r_ || !sheet_ || !sheet_->id || alpha <= 0.001f) return;
+    if (pict < 0 || pict >= kNumMenuPictures || !r_ || !sheet_ || !sheet_->id || alpha <= 0.001f) return;
     const short* p = kMenuPicture[pict];
-    r_->drawQuadUV(*sheet_, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale, p[0] * kScale, p[1] * kScale,
-                   p[2] * kScale, p[3] * kScale, 1, 1, 1, alpha);
+    if (!clipY_) {
+        r_->drawQuadUV(*sheet_, X(x) * kScale, Y(y) * kScale, w * K() * kScale, h * K() * kScale,
+                       p[0] * kScale, p[1] * kScale, p[2] * kScale, p[3] * kScale, 1, 1, 1, alpha);
+        return;
+    }
+    float dy = Y(y) * kScale, dh = h * K() * kScale, sv = p[1] * kScale, sh = p[3] * kScale;
+    if (!clipVertical(dy, dh, sv, sh)) return;
+    r_->drawQuadUV(*sheet_, X(x) * kScale, dy, w * K() * kScale, dh,
+                   p[0] * kScale, sv, p[2] * kScale, sh, 1, 1, 1, alpha);
 }
 
 void MenuPainter::quad(float x, float y, float w, float h, const float* left, const float* right) {
@@ -65,33 +112,59 @@ void MenuPainter::quad(float x, float y, float w, float h, const float* left, co
         white_ = r_->upload(img);
     }
     // A horizontal gradient as narrow strips (the 2D path has no per-vertex colour)
+    float dy = Y(y) * kScale, dh = h * K() * kScale, sv = 0, sh = 1;
+    if (clipY_ && !clipVertical(dy, dh, sv, sh)) return;
     const int strips = left[3] == right[3] && left[0] == right[0] ? 1 : std::max(1, int(w * kScale / 4));
     for (int i = 0; i < strips; ++i) {
         const float t = (i + 0.5f) / strips;
         float c[4];
         for (int k = 0; k < 4; ++k) c[k] = left[k] + (right[k] - left[k]) * t;
-        r_->fillRect(X(x + w * i / strips) * kScale, Y(y) * kScale, w / strips * K() * kScale + 0.01f, h * K() * kScale,
+        r_->fillRect(X(x + w * i / strips) * kScale, dy, w / strips * K() * kScale + 0.01f, dh,
                      c[0], c[1], c[2], c[3]);
     }
 }
 
+void MenuPainter::slant(float x, float y, float w, float h, float lean, const float* left, const float* right) {
+    if (!r_) return;
+    const int strips = left[3] == right[3] && left[0] == right[0] && left[1] == right[1] && left[2] == right[2]
+                           ? 1 : std::max(1, int(w * kScale / 4));
+    for (int i = 0; i < strips; ++i) {
+        const float t = (i + 0.5f) / strips;
+        float c[4];
+        for (int k = 0; k < 4; ++k) c[k] = left[k] + (right[k] - left[k]) * t;
+        const float x0 = x + w * i / strips, x1 = x + w * (i + 1) / strips + (i + 1 < strips ? 0.01f : 0.0f);
+        const float xy[8] = {X(x0 + lean) * kScale, Y(y) * kScale,     X(x1 + lean) * kScale, Y(y) * kScale,
+                             X(x1) * kScale,        Y(y + h) * kScale, X(x0) * kScale,        Y(y + h) * kScale};
+        r_->fillQuad(xy, c[0], c[1], c[2], c[3]);
+    }
+}
+
 MenuPainter::Cached& MenuPainter::rasterise(const std::string& s, float size) {
-    const std::string key = s + '\x01' + std::to_string(int(size * 10));
-    Cached& c = text_[key];
     const float density = std::max(1.0f, std::round(r_->pixelScale() * 4.0f) / 4.0f);
+    // The original edge was a one-menu-unit offset. Rasterise it at the font's actual pixel
+    // density, then combine its pixels into one antialiased outline texture before drawing.
+    const int pad = outline_ ? std::max(1, int(std::ceil(kScale * K() * density))) : 0;
+    const std::string key = s + '\x01' + std::to_string(int(size * 10)) + '\x02' + std::to_string(pad);
+    Cached& c = text_[key];
     const int generation = font_ ? font_->generation() : -2;
-    if (c.tex.id && c.density == density && c.generation == generation) return c;
+    if (c.tex.id && c.density == density && c.generation == generation && (pad == 0 || c.edgeTex.id)) return c;
     r_->destroy(c.tex);
+    r_->destroy(c.edgeTex);
     c = Cached();
     if (!font_ || !font_->loaded() || s.empty()) return c;
     Image img;
     const float em = size * kScale * density;
-    if (!font_->rasterise({s}, em, em * 1.2f, 0, img)) return c;
+    if (!font_->rasterise({s}, em, em * 1.2f, pad, img)) return c;
     c.tex = r_->upload(img);
-    c.w = img.width / density;
-    c.h = img.height / density;
+    c.pad = float(pad) / density;
+    c.w = float(img.width - 2 * pad) / density;
+    c.h = float(img.height - 2 * pad) / density;
     c.density = density;
     c.generation = generation;
+    if (pad > 0) {
+        Image outline;
+        if (makeGlyphOutline(img, pad, outline)) c.edgeTex = r_->upload(outline);
+    }
     return c;
 }
 
@@ -99,15 +172,52 @@ void MenuPainter::text(const std::string& s, float x, float y, bool dark, float 
     if (!r_ || s.empty() || alpha <= 0.001f) return;
     Cached& c = rasterise(s, size * K());
     if (!c.tex.id) return;
+    const float x0 = X(x) * kScale - c.pad;
+    const float w = c.w + 2 * c.pad;
+    if (!clipY_) {
+        const float y0 = Y(y) * kScale - c.pad, h = c.h + 2 * c.pad;
+        const float k = dark ? 0.0f : 1.0f;
+        if (outline_ && c.edgeTex.id) {
+            const float edge = dark ? 1.0f : 0.0f;
+            r_->drawQuad(c.edgeTex, x0, y0, w, h, edge, edge, edge, alpha);
+        }
+        r_->drawQuad(c.tex, x0, y0, w, h, k, k, k, alpha);
+        return;
+    }
+    auto drawTextTexture = [&](const Texture& tex, float red, float green, float blue) {
+        float dy = Y(y) * kScale - c.pad, dh = c.h + 2 * c.pad, sv = 0, sh = float(tex.height);
+        if (!clipVertical(dy, dh, sv, sh)) return;
+        r_->drawQuadUV(tex, x0, dy, w, dh, 0, sv, float(tex.width), sh, red, green, blue, alpha);
+    };
     const float k = dark ? 0.0f : 1.0f;
-    r_->drawQuad(c.tex, X(x) * kScale, Y(y) * kScale, c.w, c.h, k, k, k, alpha);
+    if (outline_ && c.edgeTex.id) {
+        const float edge = dark ? 1.0f : 0.0f;
+        drawTextTexture(c.edgeTex, edge, edge, edge);
+    }
+    drawTextTexture(c.tex, k, k, k);
 }
 
 void MenuPainter::textTint(const std::string& s, float x, float y, float r, float g, float b, float alpha, float size) {
     if (!r_ || s.empty() || alpha <= 0.001f) return;
     Cached& c = rasterise(s, size * K());
     if (!c.tex.id) return;
-    r_->drawQuad(c.tex, X(x) * kScale, Y(y) * kScale, c.w, c.h, r, g, b, alpha);
+    const float x0 = X(x) * kScale - c.pad;
+    const float w = c.w + 2 * c.pad;
+    if (!clipY_) {
+        const float y0 = Y(y) * kScale - c.pad, h = c.h + 2 * c.pad;
+        const float edge = r + g + b > 0.01f ? 0.0f : 1.0f;
+        if (outline_ && c.edgeTex.id) r_->drawQuad(c.edgeTex, x0, y0, w, h, edge, edge, edge, alpha);
+        r_->drawQuad(c.tex, x0, y0, w, h, r, g, b, alpha);
+        return;
+    }
+    auto drawTextTexture = [&](const Texture& tex, float red, float green, float blue) {
+        float dy = Y(y) * kScale - c.pad, dh = c.h + 2 * c.pad, sv = 0, sh = float(tex.height);
+        if (!clipVertical(dy, dh, sv, sh)) return;
+        r_->drawQuadUV(tex, x0, dy, w, dh, 0, sv, float(tex.width), sh, red, green, blue, alpha);
+    };
+    const float edge = r + g + b > 0.01f ? 0.0f : 1.0f;
+    if (outline_ && c.edgeTex.id) drawTextTexture(c.edgeTex, edge, edge, edge);
+    drawTextTexture(c.tex, r, g, b);
 }
 
 void MenuPainter::textCentred(const std::string& s, float x, float y, bool dark, float alpha, float size) {
@@ -185,6 +295,7 @@ void MenuPainter::gauge(float x, float y, int value, float alpha, bool highlight
     piece(knob, y - 16, p[0], p[1], p[2], p[3], alpha, r, 1, b);
 }
 
+
 void MenuPainter::backButton(float x, float y, bool pressed, int bob, float alpha) {
     const float lime[4] = {0xEB / 255.0f, 1, 0x4B / 255.0f, alpha};
     const float white[4] = {1, 1, 1, alpha};
@@ -211,6 +322,20 @@ void MenuPainter::backBar(float x, float y, bool pressed, float alpha) {
     quad(x + 24, y, 184, 24, c, c);
     quad(x + 208, y, 24, 24, c, clear);
     piece(x + 82, y, 0, 224, 76, 24, alpha);
+}
+
+void MenuPainter::backOkBar(float x, float y, int pressed, float alpha) {
+    const float cyan[4] = {0x4B / 255.0f, 1, 0xEB / 255.0f, alpha};
+    const float white[4] = {1, 1, 1, alpha};
+    const float* b = pressed == 1 ? cyan : white;
+    const float* o = pressed == 5 ? cyan : white;
+    const float clearB[4] = {b[0], b[1], b[2], 0}, clearO[4] = {o[0], o[1], o[2], 0};
+    quad(x, y, 24, 24, clearB, b);
+    quad(x + 24, y, 90, 24, b, b);
+    quad(x + 118, y, 90, 24, o, o);
+    quad(x + 208, y, 24, 24, o, clearO);
+    piece(x + 36, y, 0, 224, 76, 24, alpha);
+    piece(x + 126, y + 2, 76, 224, 64, 20, alpha);
 }
 
 void MenuPainter::digit(int d, float x, float y, float alpha) {
