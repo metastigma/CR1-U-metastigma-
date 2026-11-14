@@ -231,8 +231,14 @@ struct App {
     // native resolution, no MSAA, vsync. Windowed mode remains available via F11 / Options.
     struct Video {
         int width = 1024, height = 768;    // window size (windowed) or display mode (fullscreen)
-        int display = 2;                   // 0 windowed, 1 fullscreen (that mode), 2 borderless (the desktop's)
-        bool displayExplicit = false;      // true only after the user deliberately chooses a display mode
+        int display =
+#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
+            2;
+#else
+            1;
+#endif
+        bool displayExplicit = false;
+        bool resolutionExplicit = false;
         bool widescreen = false;           // the screen widens to the window (up to 21:9); else 4:3
         int paintings = 0;                 // painted rooms: 0 the original's (2x, a screen-sized window following
                                            // the player), 1 the whole painting at the screen's height, 2 at its width
@@ -3187,7 +3193,8 @@ void saveMix(const App& app) {
                               std::to_string(v.sharpness) + "\nhd_textures=" + std::to_string(int(v.hdTextures)) +
                               "\nsmooth_models=" + std::to_string(v.smoothModels) + "\nhd_models=" + std::to_string(int(v.hdModels)) +
                               "\nanisotropy=" + std::to_string(v.anisotropy) + "\nsharp_textures=" + std::to_string(int(v.sharpTextures)) +
-                              "\nlayout=" + std::to_string(v.layout) +
+                              "\nresolution_user_set=" + std::to_string(int(v.resolutionExplicit)) +
+                               "\nlayout=" + std::to_string(v.layout) +
                               "\ncontrol_hints=" + std::to_string(int(app.showHud)) +
                               "\nenvironment_effects=" +
                               std::to_string(int(app.environmentEffects)) + "\nlock_orientation=" +
@@ -3236,9 +3243,13 @@ void loadVideo(App& app, const char* text) {
     // Older settings.ini files contain display=0 because windowed mode used to be the default.
     // Honor a saved mode only when the user explicitly chose one in the current version.
     v.displayExplicit = keyValue(text, "\ndisplay_user_set=", 0) != 0;
-    v.display = v.displayExplicit
-        ? std::clamp(keyValue(text, "\ndisplay=", v.display), 0, 2)
-        : 2;
+    v.display = v.displayExplicit ? std::clamp(keyValue(text, "\ndisplay=", v.display), 0, 2) :
+#if defined(SDL_PLATFORM_ANDROID) || defined(SDL_PLATFORM_IOS)
+        2;
+#else
+        1;
+#endif
+    v.resolutionExplicit = keyValue(text, "\nresolution_user_set=", int(v.width != 1024 || v.height != 768)) != 0;
     v.widescreen = keyValue(text, "\nwidescreen=", v.widescreen) != 0;
     v.paintings = std::clamp(keyValue(text, "\npainted_rooms=", keyValue(text, "\nzoom_paintings=", 0) ? 2 : v.paintings), 0, 2);
     v.renderScale = std::clamp(keyValue(text, "\nrender_scale=", v.renderScale), 25, 400);
@@ -3318,20 +3329,59 @@ void applyVideo(App& app) {
     r.setFiltering(tf);
     if (!app.window) return;
     if (v.display == 0) {
-        SDL_SetWindowFullscreen(app.window, false);
-        // The size in pixels: the window's in points, so divide by the display's density
+        if (!SDL_SetWindowFullscreen(app.window, false))
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "leaving fullscreen: %s", SDL_GetError());
+        SDL_SetWindowPosition(app.window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
         const float density = std::max(SDL_GetWindowPixelDensity(app.window), 0.25f);
         if (!SDL_SetWindowSize(app.window, int(v.width / density + 0.5f), int(v.height / density + 0.5f)))
             SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "window size %dx%d: %s", v.width, v.height, SDL_GetError());
     } else {
+        const SDL_DisplayID display = SDL_GetDisplayForWindow(app.window);
         SDL_DisplayMode mode{};
-        const bool exact = v.display == 1 &&
-                           SDL_GetClosestFullscreenDisplayMode(SDL_GetDisplayForWindow(app.window), v.width, v.height, 0.0f,
-                                                               true, &mode);
-        SDL_SetWindowFullscreenMode(app.window, exact ? &mode : nullptr); // nullptr: borderless at the desktop's size
-        SDL_SetWindowFullscreen(app.window, true);
+        const SDL_DisplayMode* requested = nullptr;
+        if (v.display == 1) {
+            int width = v.width, height = v.height;
+            float refreshRate = 0.0f;
+            const bool nativeDesktop = !v.resolutionExplicit;
+            if (nativeDesktop) {
+                const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(display);
+                if (desktop) {
+                    width = desktop->w;
+                    height = desktop->h;
+                    refreshRate = desktop->refresh_rate;
+                } else {
+                    SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "desktop display mode unavailable: %s", SDL_GetError());
+                }
+            }
+            const bool found = width > 0 && height > 0 &&
+                               SDL_GetClosestFullscreenDisplayMode(display, width, height, refreshRate, true, &mode);
+            if (found && (!nativeDesktop || (mode.w == width && mode.h == height))) requested = &mode;
+            else SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "exclusive mode %dx%d unavailable; using desktop fullscreen", width, height);
+        }
+        if (!SDL_SetWindowFullscreenMode(app.window, requested)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "setting fullscreen mode: %s", SDL_GetError());
+            requested = nullptr;
+            if (!SDL_SetWindowFullscreenMode(app.window, nullptr))
+                SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "setting desktop fullscreen fallback: %s", SDL_GetError());
+        }
+        if (!SDL_SetWindowFullscreen(app.window, true)) {
+            SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "entering fullscreen: %s", SDL_GetError());
+            if (requested && SDL_SetWindowFullscreenMode(app.window, nullptr) &&
+                SDL_SetWindowFullscreen(app.window, true))
+                SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "exclusive fullscreen failed; using desktop fullscreen");
+        }
     }
-    SDL_SyncWindow(app.window);
+    const bool hidden = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_HIDDEN) != 0;
+    if (!hidden) {
+        if (!SDL_SyncWindow(app.window))
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "waiting for fullscreen transition: %s", SDL_GetError());
+        const bool fullscreen = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_FULLSCREEN) != 0;
+        const SDL_DisplayMode* activeMode = SDL_GetWindowFullscreenMode(app.window);
+        if (v.display != 0 && !fullscreen)
+            SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "window manager did not enter fullscreen");
+        else if (v.display == 1 && fullscreen && !activeMode)
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "fullscreen is desktop-borderless, not exclusive");
+    }
     applyOrientation(app);
     // The window manager applies the size when it gets to it: wait for it (up to a second) so the
     // next frame, and captures, have it
@@ -3382,9 +3432,14 @@ void adjustVideo(App& app, int row, int dir) {
     switch (row) {
     case 0: { // resolution
         int i = 0;
+        int currentWidth = v.width, currentHeight = v.height;
+        if (v.display == 1 && !v.resolutionExplicit && app.window) {
+            if (const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(app.window)))
+                currentWidth = desktop->w, currentHeight = desktop->h;
+        }
         const int n = int(sizeof kResolutions / sizeof kResolutions[0]);
         for (int k = 0; k < n; ++k)
-            if (kResolutions[k][0] == v.width && kResolutions[k][1] == v.height) i = k;
+            if (kResolutions[k][0] == currentWidth && kResolutions[k][1] == currentHeight) i = k;
         SDL_Rect usable{0, 0, 3840, 2160};
         if (app.window) SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(app.window), &usable);
         const float density = app.window ? std::max(SDL_GetWindowPixelDensity(app.window), 0.25f) : 1.0f;
@@ -3395,6 +3450,7 @@ void adjustVideo(App& app, int row, int dir) {
         }
         v.width = kResolutions[i][0];
         v.height = kResolutions[i][1];
+        v.resolutionExplicit = true;
         break;
     }
     case 1: v.display = (v.display + dir + 3) % 3; v.displayExplicit = true; break;
@@ -3724,7 +3780,8 @@ std::vector<OptRow> optionRows(App& app, int page) {
     }
     case 2: { // Display
         static const char* const kDisplay[] = {"Window", "Fullscreen", "Borderless"};
-        value("Resolution", v.display == 2 ? "Desktop" : std::to_string(v.width) + " x " + std::to_string(v.height),
+        value("Resolution", (v.display == 2 || (v.display == 1 && !v.resolutionExplicit)) ?
+                                  "Desktop" : std::to_string(v.width) + " x " + std::to_string(v.height),
               [&app](int dir) { adjustVideo(app, 0, dir ? dir : 1); });
         value("Display", kDisplay[v.display], [&app](int dir) { adjustVideo(app, 1, dir ? dir : 1); });
         pair("Aspect", "4:3", "Wide", v.widescreen ? 1 : 0, [&app](int i) {
@@ -18956,10 +19013,11 @@ void videoArgs(App& app, int argc, char** argv) {
             if (SDL_sscanf(next, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240) {
                 v.width = std::min(w, 3840);
                 v.height = std::min(h, 2160);
+                v.resolutionExplicit = true;
             }
-        } else if (SDL_strcmp(a, "--windowed") == 0) v.display = 0;
-        else if (SDL_strcmp(a, "--fullscreen") == 0) v.display = 1;
-        else if (SDL_strcmp(a, "--borderless") == 0) v.display = 2;
+        } else if (SDL_strcmp(a, "--windowed") == 0) v.display = 0, v.displayExplicit = true;
+        else if (SDL_strcmp(a, "--fullscreen") == 0) v.display = 1, v.displayExplicit = false;
+        else if (SDL_strcmp(a, "--borderless") == 0) v.display = 2, v.displayExplicit = true;
         else if (SDL_strcmp(a, "--widescreen") == 0) v.widescreen = true;
         else if (SDL_strcmp(a, "--layout") == 0 && i + 1 < argc) // --layout auto | ipad | iphone | android
             v.layout = SDL_strcmp(argv[i + 1], "android") == 0 ? 3 : SDL_strcmp(argv[i + 1], "iphone") == 0 ? 2
@@ -19184,8 +19242,11 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
     for (cr::Backend b : {want, cr::Backend::OpenGL}) {
         const uint64_t flags = cr::Renderer::windowFlags(b);
         if (!flags) continue; // not built in
-        app->window = SDL_CreateWindow("Chaos Rings", 1024, 768,
-                                       SDL_WindowFlags(flags) | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        SDL_WindowFlags windowFlags = SDL_WindowFlags(flags) | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if !defined(SDL_PLATFORM_ANDROID) && !defined(SDL_PLATFORM_IOS)
+        windowFlags |= SDL_WINDOW_HIDDEN;
+#endif
+        app->window = SDL_CreateWindow("Chaos Rings", 1024, 768, windowFlags);
         if (!app->window) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "SDL_CreateWindow: %s", SDL_GetError());
             continue;
@@ -19436,6 +19497,33 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
         if (!viewer) bootTitle(*app);
     }
 
+#if !defined(SDL_PLATFORM_ANDROID) && !defined(SDL_PLATFORM_IOS)
+    if (!SDL_ShowWindow(app->window))
+        SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "showing game window: %s", SDL_GetError());
+    if (!SDL_SyncWindow(app->window))
+        SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "waiting for initial window state: %s", SDL_GetError());
+    bool isFullscreen = (SDL_GetWindowFlags(app->window) & SDL_WINDOW_FULLSCREEN) != 0;
+    if (app->video.display != 0 && !isFullscreen) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "initial fullscreen request was not applied; retrying on visible window");
+        if (!SDL_SetWindowFullscreen(app->window, true))
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "retrying fullscreen: %s", SDL_GetError());
+        if (!SDL_SyncWindow(app->window))
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "waiting for fullscreen retry: %s", SDL_GetError());
+        isFullscreen = (SDL_GetWindowFlags(app->window) & SDL_WINDOW_FULLSCREEN) != 0;
+    }
+    if (app->video.display != 0 && !isFullscreen) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "exclusive fullscreen was refused; trying desktop fullscreen");
+        if (!SDL_SetWindowFullscreenMode(app->window, nullptr))
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "setting desktop fullscreen fallback: %s", SDL_GetError());
+        if (!SDL_SetWindowFullscreen(app->window, true))
+            SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "entering desktop fullscreen fallback: %s", SDL_GetError());
+        if (!SDL_SyncWindow(app->window))
+            SDL_LogWarn(SDL_LOG_CATEGORY_VIDEO, "waiting for desktop fullscreen fallback: %s", SDL_GetError());
+        isFullscreen = (SDL_GetWindowFlags(app->window) & SDL_WINDOW_FULLSCREEN) != 0;
+    }
+    if (app->video.display != 0 && !isFullscreen)
+        SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "window manager left the game windowed after fullscreen retries");
+#endif
     return SDL_APP_CONTINUE;
 }
 
@@ -19629,10 +19717,11 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
         if (event->key.key == SDLK_X && !event->key.repeat && app.mode == Mode::Maps && app.runner.running())
             setSceneSkip(app, crinput::HeldSource::Keyboard, true);
         if (event->key.key == SDLK_F11 && !event->key.repeat) {
-            app.video.display = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_FULLSCREEN) ? 0 : 2;
-            app.video.displayExplicit = true;
+            const int savedDisplay = app.video.display;
+            const bool wasFullscreen = (SDL_GetWindowFlags(app.window) & SDL_WINDOW_FULLSCREEN) != 0;
+            app.video.display = wasFullscreen ? 0 : 1;
             applyVideo(app);
-            saveMix(app);
+            app.video.display = savedDisplay; // temporary; do not persist F11
             break;
         }
         if (app.vitaLogo.phase) { // the Vita's logos: confirm cuts the hold short
