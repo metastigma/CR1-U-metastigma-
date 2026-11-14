@@ -233,8 +233,8 @@ float MenuPainter::textWidth(const std::string& s, float size) {
 
 void MenuPainter::rowBar(float x, float y, const std::string& label, float alpha, bool highlight) {
     const float a = std::min(alpha, 179.0f / 255.0f);
-    // Keyboard cursor: the lime the game lights pressed controls with (0xEBFF4B)
-    const float r = highlight ? 0xEB / 255.0f : 1, g = 1, b = highlight ? 0x4B / 255.0f : 1;
+    // Keyboard cursor: use the same cyan-lime accent as the pressed OK/Back controls (0x4BFFEB)
+    const float r = highlight ? 0x4B / 255.0f : 1, g = 1, b = highlight ? 0xEB / 255.0f : 1;
     const float solid[4] = {r, g, b, a}, clear[4] = {r, g, b, 0};
     quad(x, y, 100, 24, solid, solid);
     quad(x + 100, y, 123, 24, solid, clear);
@@ -247,7 +247,7 @@ void MenuPainter::button(float x, float y, int word, const std::string& label, b
     for (int k = 0; k < 14; ++k) piece(x + 28 + 4 * k, y, 28, 184, 4, 40, alpha);
     piece(x + 84, y, 28, 184, 24, 40, alpha);
     // Face: normal or selected strip
-    const float r = highlight ? 0xEB / 255.0f : 1, b = highlight ? 0x4B / 255.0f : 1;
+    const float r = highlight ? 0x4B / 255.0f : 1, b = highlight ? 0xEB / 255.0f : 1;
     piece(x, y + 4, 996, selected ? 932.0f : 900.0f, 16, 32, alpha, r, 1, b);
     for (int k = 0; k < 20; ++k) piece(x + 16 + 4 * k, y + 4, selected ? 120.0f : 76.0f, 188, 4, 32, alpha, r, 1, b);
     piece(x + 96, y + 4, selected ? 124.0f : 80.0f, 188, 16, 32, alpha, r, 1, b);
@@ -297,7 +297,7 @@ void MenuPainter::gauge(float x, float y, int value, float alpha, bool highlight
 
 
 void MenuPainter::backButton(float x, float y, bool pressed, int bob, float alpha) {
-    const float lime[4] = {0xEB / 255.0f, 1, 0x4B / 255.0f, alpha};
+    const float lime[4] = {0x4B / 255.0f, 1, 0xEB / 255.0f, alpha};
     const float white[4] = {1, 1, 1, alpha};
     const float* c = pressed ? lime : white;
     const float clear[4] = {white[0], white[1], white[2], 0};
