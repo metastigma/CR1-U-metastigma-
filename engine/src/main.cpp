@@ -5747,21 +5747,23 @@ void campClick(App& app, float px, float py) {
             if (in(kPlateX + 200 * (1 - campEase(app)), kMemberY + kMemberStep * float(k), 136, 40)) { c.member = k; if (c.phase == App::Camp::Member) campChoose(app); return; }
         return;
     }
-    if (c.phase == App::Camp::Slot) {
-        for (int k = 0; k < kEquipSlots; ++k)
-            if (in(kRowX + 64 + 160 * (1 - campEase(app)), campSlotY(app, k), 256 * campSlotScale(app), 44 * campSlotScale(app))) {
-                c.slot = k; campChoose(app); return;
-            }
-        return;
+    if (campScrollable(app) && campScrollCount(app) > kRows) {
+        if (in(campui::kGaugeX - 4, campui::kGaugeY - 14, 24, 20)) { campScrollBy(app, -1); return; }
+        if (in(campui::kGaugeX - 4, campui::kGaugeY + campui::kGaugeH - 2, 24, 20)) { campScrollBy(app, 1); return; }
     }
-    if (c.phase == App::Camp::List) {
-        if (int(c.list.size()) > kRows && in(454, kRowY - 18, 28, 20)) campScrollBy(app, -1);
-        else if (int(c.list.size()) > kRows && in(454, kRowY + kRowH * kRows - 2, 28, 22)) campScrollBy(app, 1);
-        else if (in(campListX(app), kRowY, 256, kRowH * kRows)) {
-            const int index = c.listTop + int((my - kRowY) / kRowH);
-            if (index < int(c.list.size())) { c.listCursor = index; campChoose(app); }
-        } else if (c.page == App::Camp::Items && inAt(lx0, 0, 40, 180, 40))
-            campNextCategory(app, 1), menuSound(app, se::kPage);
+    if (campSlotList(app) || c.phase == App::Camp::List || c.phase == App::Camp::Entries) {
+        if (in(campListX(app), campui::kListTop, 256, campui::kListBottom - campui::kListTop)) {
+            const int index = int(std::floor((my - campui::kFocusY + campScrollPx(app)) / campui::kRowH));
+            const int n = campScrollCount(app);
+            if (index >= 0 && index < n) {
+                if (index == campVisualFocus(app)) {
+                    campScrollTo(app, index, true);
+                    if (!(c.page == App::Camp::Equip && c.phase == App::Camp::Entries)) campChoose(app);
+                } else campScrollTo(app, index);
+            }
+        } else if (c.page == App::Camp::Items && c.phase == App::Camp::List && inAt(lx0, 0, 40, 180, 40)) {
+            campNextCategory(app, 1); menuSound(app, se::kPage);
+        }
         return;
     }
     if (c.phase == App::Camp::Ask) {
@@ -5858,15 +5860,18 @@ void drawGeneRow(App& app, cr::MenuPainter& m, float x, float y, int plate, bool
         for (int k = 0; k < total; ++k) m.picture(k < total - known ? 10 : 11, x + 251 - 14 * float(total) + 14 * float(k), y + 30, a);
 }
 
-void drawCampScrollBar(cr::MenuPainter& m, int top, int n, float a) {
+void drawCampScrollBar(cr::MenuPainter& m, float scroll, int n, float a) {
     using namespace campui;
     if (n <= kRows) return;
-    const float sx = 462, h = kRowH * kRows;
+    const float sx = kGaugeX, y = kGaugeY, h = kGaugeH;
     const float dark[4] = {0.05f, 0.05f, 0.08f, 0.8f * a};
-    m.quad(sx, kRowY, 8, h, dark, dark);
-    m.picture(76, sx - 4, kRowY - 14, a);
-    m.picture(77, sx - 4, kRowY + h - 2, a);
-    m.picture(106, sx, kRowY + (h - 40) * float(top) / float(n - kRows), a);
+    m.quad(sx, y, 8, h, dark, dark);
+    m.picture(76, sx - 4, y - 14, a);
+    m.picture(77, sx - 4, y + h - 2, a);
+    const float len = campScrollThumbLength(n), at = campScrollThumbOffset(scroll, n);
+    m.piece(sx, y + 12 + at, 160, 196, 16, 12, a);
+    if (len > 20) m.pieceTo(sx, y + 24 + at, 16, len - 20, 160, 208, 16, 4, a);
+    m.piece(sx, y + 4 + at + len, 160, 212, 16, 8, a);
 }
 
 // ComUty_GeneBoardDraw at (x, y): the plate's name, its picture (gene_m*c.mct), "n / 6" known, then
@@ -7340,7 +7345,7 @@ void drawCamp(App& app) {
             if (y + kRowH > kListTop && y < kListBottom) row(k, x, y, k == visualFocus);
         }
         m.clearClip();
-        drawCampScrollBar(m, int(std::floor(scroll / kRowH)), n, ease);
+        drawCampScrollBar(m, scroll, n, ease);
     };
     auto memberPlates = [&](bool lit) {
         right();
