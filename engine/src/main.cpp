@@ -14695,6 +14695,11 @@ int mobileInputSelfTest(App& app) {
                     !emptyGene2 || emptyGene2->icon != 62 ||
                     !emptyGene3 || emptyGene3->icon != 62;
     }
+    // Seed only the Human Gene records needed by these menu tests; restore the user's inventory below.
+    const auto savedItems = app.game.items;
+    for (int item : {81, 83, 85, 87, 131, 133, 135, 137,
+                     82, 84, 86, 88, 132, 134, 136, 138})
+        app.game.items[item] = 1;
     const std::vector<int> expectedWarrior{81, 83, 85, 131, 133, 135};
     const std::vector<int> expectedMage{82, 84, 86, 132, 134, 136};
     problems += campPlateDisplayEntries(479) != expectedWarrior ||
@@ -14733,10 +14738,11 @@ int mobileInputSelfTest(App& app) {
                 !humanCamp.list.empty();
     app.campOpen = false;
     // These reserve records stay in game data; the board only presents its six visible entries.
-    const auto& fullWarrior = cr::plateContents(479);
-    const auto& fullMage = cr::plateContents(480);
-    problems += fullWarrior.size() != 8 || fullWarrior[3] != 87 || fullWarrior[7] != 137 ||
-                fullMage.size() != 8 || fullMage[3] != 88 || fullMage[7] != 138;
+    const auto& warriorPlateData = cr::plateContents(479);
+    const auto& magePlateData = cr::plateContents(480);
+    problems += warriorPlateData.size() != 8 || warriorPlateData[3] != 87 || warriorPlateData[7] != 137 ||
+                magePlateData.size() != 8 || magePlateData[3] != 88 || magePlateData[7] != 138;
+    app.game.items = savedItems;
     app.runner.stop();
     app.pendingEntry = App::Entry::None;
     app.titleOpen = app.optionsOpen = app.charSelectOpen = false;
