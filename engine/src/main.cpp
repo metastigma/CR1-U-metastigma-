@@ -7331,6 +7331,17 @@ void drawCamp(App& app) {
     }
     const int ch = campCharacter(app, c.member);
     const int item = c.list.empty() ? 0 : c.list[size_t(c.listCursor)];
+    const float scroll = campScrollPx(app);
+    const int visualFocus = campVisualFocus(app);
+    auto scrollList = [&](float x, int n, auto&& row) {
+        m.setClip(kListTop, kListBottom);
+        for (int k = 0; k < n; ++k) {
+            const float y = kFocusY + kRowH * float(k) - scroll;
+            if (y + kRowH > kListTop && y < kListBottom) row(k, x, y, k == visualFocus);
+        }
+        m.clearClip();
+        drawCampScrollBar(m, int(std::floor(scroll / kRowH)), n, ease);
+    };
     auto memberPlates = [&](bool lit) {
         right();
         for (int k = 0; k < 2; ++k) {
@@ -7339,19 +7350,22 @@ void drawCamp(App& app) {
         }
         left();
     };
-    auto helpBoard = [&](int it) { // HELP: the item's text across the top (as the shop's)
+    auto helpBoard = [&](int it) { // ComUty_HelpWindowDraw: original 336 x 68 panel and HELP tag
         if (it <= 0) return;
         right();
-        const float hx = 152;
-        m.stretch(12, hx, 0, 512 - hx, 66, ease);
-        m.picture(18, hx + 4, 2, ease);
+        const float helpT = std::min(1.0f, float(c.anim) / 16.0f);
+        const float helpEase = 1 - (1 - helpT) * (1 - helpT);
+        const float slide = 480 * (1 - helpEase);
+        m.picture(17, 144 + slide, 8, helpEase);
+        m.picture(18, 144 + slide, -4, helpEase);
         std::vector<std::vector<std::string>> help;
         if (app.systemText.message(cr::itemHelpId(it), app.language, nullptr, help) && !help.empty()) {
-            float y = 20;
-            for (const std::string& line : help[0]) {
-                m.text(line, hx + 14, y, false, ease, 13);
-                if ((y += 16) > 52) break;
-            }
+            const int n = std::min(3, int(help[0].size()));
+            static const int kTop[4] = {0, 24, 18, 10};
+            m.setOutline(true);
+            for (int i = 0; i < n; ++i)
+                m.text(help[0][size_t(i)], 156 + slide, float(kTop[n] + 8 + 16 * i), true, helpEase, 13);
+            m.setOutline(true);
         }
         left();
     };
@@ -7361,13 +7375,12 @@ void drawCamp(App& app) {
             helpBoard(item);
             right();
             if (c.list.empty()) m.text("Nothing here.", kRowX + 56, kRowY + 16, false, ease, 15);
-            for (int k = 0; k < kRows && c.listTop + k < int(c.list.size()); ++k) {
-                const int index = c.listTop + k, it = c.list[size_t(index)];
+            scrollList(campListX(app), int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                const int it = c.list[size_t(k)];
                 const bool usable = campUsable(it);
-                drawCampRow(app, m, kRowX + 160 * (1 - ease), kRowY + kRowH * float(k), it, ownedCount(app, it),
-                            index == c.listCursor, usable || c.category != 0 ? ease : ease * 0.6f);
-            }
-            drawCampScrollBar(m, c.listTop, int(c.list.size()), ease);
+                drawCampRow(app, m, x, y, it, ownedCount(app, it), lit,
+                            usable || c.category != 0 ? ease : ease * 0.6f);
+            });
             left();
         } else {
             drawShopBoard(app, 12, 92, ch, 0, ease);
@@ -7393,13 +7406,11 @@ void drawCamp(App& app) {
         } else if (c.phase == App::Camp::Slot) {
             drawShopBoard(app, 12, 92, ch, 0, ease);
             right();
-            for (int k = 0; k < kEquipSlots; ++k) { // the rows at 70%: weapon, armor, jewel, the genes
-                const float rx = kRowX + 160 * (1 - ease) + 64, ry = campSlotY(app, k);
-                m.setScale(rx, ry, campSlotScale(app));
-                drawCampRow(app, m, rx, ry, k < 3 ? pm.equip[k] : pm.genes[k - 3], 0, c.slot == k, k == 3 ? ease * 0.7f : ease,
-                            sysText(app, 58061 + k));
-                m.setScale(0, 0, 1);
-            }
+            scrollList(kRowX, kEquipSlots, [&](int slot, float x, float y, bool lit) {
+                const int worn = slot < 3 ? pm.equip[size_t(slot)] : pm.genes[size_t(slot - 3)];
+                drawCampRow(app, m, x, y, worn, 0, lit, slot == 3 ? ease * 0.7f : ease,
+                            sysText(app, 58061 + slot), worn > 0);
+            });
             left();
         } else if (c.slot >= 3) { // a gene plate for the slot: its board beside the list
             drawGeneBoard(app, m, 12, 92, item > 0 ? item : pm.genes[c.slot - 3], ease);
@@ -7415,12 +7426,10 @@ void drawCamp(App& app) {
         } else {
             drawShopBoard(app, 12, 92, ch, item > 0 ? item : 0, ease);
             right();
-            for (int k = 0; k < kRows && c.listTop + k < int(c.list.size()); ++k) {
-                const int index = c.listTop + k, it = c.list[size_t(index)];
-                drawCampRow(app, m, kRowX + 64, kRowY + kRowH * float(k), it, it > 0 ? ownedCount(app, it) : 0,
-                            index == c.listCursor, ease);
-            }
-            drawCampScrollBar(m, c.listTop, int(c.list.size()), ease);
+            scrollList(campListX(app), int(c.list.size()), [&](int k, float x, float y, bool lit) {
+                const int it = c.list[size_t(k)];
+                drawCampRow(app, m, x, y, it, it > 0 ? ownedCount(app, it) : 0, lit, ease);
+            });
             helpBoard(item);
         }
         break;
