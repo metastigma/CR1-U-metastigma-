@@ -5380,8 +5380,10 @@ std::vector<int> campItems(const App& app, int category) {
 // What can go in member c's slot: the bag's items of the slot's kind that c may wear
 std::vector<int> campEquipList(const App& app, int c, int slot) {
     std::vector<int> out;
-    if (slot >= 3) { // the Human Genes stay; show only owned plates not worn by either member
+    if (slot >= 3) { // Human Genes stay; monster Gene slots list owned plates and the current removal option
         if (slot == 3) return out;
+        const cr::PartyMember& pm = app.game.party[size_t(c)];
+        if (pm.genes[size_t(slot - 3)] > 0) out.push_back(0); // remove this monster Gene
         for (int p = cr::kFirstPlate + 2; p < cr::kFirstPlate + cr::kPlates; ++p) {
             if (ownedCount(app, p) <= 0) continue;
             bool worn = false;
@@ -5761,24 +5763,28 @@ void campChoose(App& app) {
             menuSound(app, campui::kSoundEquip);
             c.phase = App::Camp::Slot;
         } else if (c.phase == App::Camp::List && !c.list.empty() && c.slot >= 3) {
-            if (c.slot == 3 && c.inspectOnlyPlate) {
-                if (!campHumanPlate(item)) {
+            if (c.slot == 3) {
+                if (!c.inspectOnlyPlate || !campHumanPlate(item)) {
                     menuSound(app, se::kBuzzer);
                     return;
                 }
-                // Confirming Warrior / Mage opens that plate's own learned-ability submenu.
-                // Human Genes is fixed: inspecting its contents must never replace the slot.
+                // Human Genes is fixed. Confirming Warrior / Mage opens its read-only ability submenu.
                 menuSound(app, se::kChoose);
                 campOpenEntries(app, item);
                 return;
             }
-            if (!cr::isPlate(item) || ownedCount(app, item) <= 0) {
+            // Monster Gene slots keep the original flow: select a plate to inspect its contents,
+            // then choose an entry to equip that plate into this slot. No Yes/No prompt in between.
+            if (item == 0) {
+                app.game.party[size_t(campCharacter(app, c.member))].genes[size_t(c.slot - 3)] = 0;
+                menuSound(app, campui::kSoundEquip);
+                c.phase = App::Camp::Slot;
+            } else if (!cr::isPlate(item) || ownedCount(app, item) <= 0 ||
+                       cr::plateLearned(app.game, item) == 0) {
                 menuSound(app, se::kBuzzer);
             } else {
-                c.pendingPlate = item;
-                c.confirm = 0;
                 menuSound(app, se::kChoose);
-                c.phase = App::Camp::Ask;
+                campOpenEntries(app, item);
             }
         } else if (c.phase == App::Camp::Entries && c.slot >= 3 && cr::isPlate(c.plate)) {
             if (c.inspectOnlyPlate) {
@@ -14742,7 +14748,60 @@ int mobileInputSelfTest(App& app) {
     const auto& magePlateData = cr::plateContents(480);
     problems += warriorPlateData.size() != 8 || warriorPlateData[3] != 87 || warriorPlateData[7] != 137 ||
                 magePlateData.size() != 8 || magePlateData[3] != 88 || magePlateData[7] != 138;
+
+    // Monster Gene slots 1..3 must retain the original plate -> abilities -> equip flow.
+    const int firstMember = campCharacter(app, 0), secondMember = campCharacter(app, 1);
+    const auto savedFirstGenes = app.game.party[size_t(firstMember)].genes;
+    const auto savedSecondGenes = app.game.party[size_t(secondMember)].genes;
+    app.game.items.clear();
+    app.game.party[size_t(firstMember)].genes[1] = 0;
+    app.game.party[size_t(firstMember)].genes[2] = 0;
+    app.game.party[size_t(firstMember)].genes[3] = 0;
+    app.game.party[size_t(secondMember)].genes[1] = 0;
+    app.game.party[size_t(secondMember)].genes[2] = 0;
+    app.game.party[size_t(secondMember)].genes[3] = 0;
+    for (int plate = 481; plate <= 483; ++plate) {
+        app.game.items[plate] = 1;
+        for (int entry : cr::plateContents(plate))
+            if (entry > 0) app.game.items[entry] = 1;
+    }
+    humanCamp.inspectOnlyPlate = false;
+    humanCamp.pendingPlate = 0;
+    for (int slot = 4; slot <= 6; ++slot) {
+        const int plate = 481 + slot - 4;
+        humanCamp.page = App::Camp::Equip;
+        humanCamp.phase = App::Camp::Slot;
+        humanCamp.slot = slot;
+        humanCamp.member = 0;
+        humanCamp.list.clear();
+        humanCamp.listCursor = humanCamp.listTop = 0;
+        campChoose(app); // open this monster Gene slot's plate list
+        problems += humanCamp.phase != App::Camp::List ||
+                    std::find(humanCamp.list.begin(), humanCamp.list.end(), plate) == humanCamp.list.end();
+        const auto selected = std::find(humanCamp.list.begin(), humanCamp.list.end(), plate);
+        if (selected != humanCamp.list.end()) {
+            humanCamp.listCursor = int(selected - humanCamp.list.begin());
+            campChoose(app); // selecting a plate must open its abilities directly
+            const auto& expectedEntries = cr::plateContents(plate);
+            std::vector<int> knownEntries;
+            for (int entry : expectedEntries)
+                if (entry > 0 && ownedCount(app, entry) > 0) knownEntries.push_back(entry);
+            problems += humanCamp.phase != App::Camp::Entries || humanCamp.plate != plate ||
+                        humanCamp.pendingPlate != 0 || humanCamp.list != knownEntries;
+            if (!humanCamp.list.empty()) {
+                humanCamp.listCursor = 0;
+                campChoose(app); // choosing an entry equips the selected plate in this slot
+                problems += humanCamp.phase != App::Camp::Slot ||
+                            app.game.party[size_t(firstMember)].genes[size_t(slot - 3)] != plate;
+                const auto removal = campEquipList(app, firstMember, slot);
+                problems += std::find(removal.begin(), removal.end(), 0) == removal.end();
+            }
+        }
+    }
+    app.game.party[size_t(firstMember)].genes = savedFirstGenes;
+    app.game.party[size_t(secondMember)].genes = savedSecondGenes;
     app.game.items = savedItems;
+    app.campOpen = false;
     app.runner.stop();
     app.pendingEntry = App::Entry::None;
     app.titleOpen = app.optionsOpen = app.charSelectOpen = false;
