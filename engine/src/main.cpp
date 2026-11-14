@@ -5528,6 +5528,14 @@ std::vector<int> campPlateDisplayEntries(int plate) {
 }
 bool campHumanPlate(int plate) { return plate == cr::kFirstPlate || plate == cr::kFirstPlate + 1; }
 std::vector<int> campKnownEntries(const App& app, int plate) {
+    // Shared Gene menu: retain its original full plate data, independently of Equip's Human view.
+    std::vector<int> out;
+    if (!cr::isPlate(plate)) return out;
+    for (int entry : cr::plateContents(plate))
+        if (entry > 0 && ownedCount(app, entry) > 0) out.push_back(entry);
+    return out;
+}
+std::vector<int> campKnownEquipHumanEntries(const App& app, int plate) {
     std::vector<int> out;
     for (int entry : campPlateDisplayEntries(plate))
         if (ownedCount(app, entry) > 0) out.push_back(entry);
@@ -5535,7 +5543,10 @@ std::vector<int> campKnownEntries(const App& app, int plate) {
 }
 void campRefreshList(App& app) {
     App::Camp& c = app.camp;
-    if (c.phase == App::Camp::Entries) c.list = campKnownEntries(app, c.plate);
+    if (c.phase == App::Camp::Entries && c.page == App::Camp::Equip &&
+        c.slot == 3 && c.inspectOnlyPlate)
+        c.list = campKnownEquipHumanEntries(app, c.plate);
+    else if (c.phase == App::Camp::Entries) c.list = campKnownEntries(app, c.plate);
     else if (c.page == App::Camp::Items) c.list = campItems(app, c.category);
     else if (c.page == App::Camp::Equip && c.slot == 3 && c.inspectOnlyPlate)
         c.list = {cr::kFirstPlate, cr::kFirstPlate + 1}; // fixed Human Genes browser: Warrior / Mage
@@ -6030,23 +6041,19 @@ void drawCampScrollBar(App& app, cr::MenuPainter& m, float scroll, int n, float 
     m.piece(sx, y + 4 + at + len, 160, 212, 16, 8, a);
 }
 
-// ComUty_GeneBoardDraw at (x, y): the plate's name, picture (gene_m*c.mct), "n / 6" known,
-// and the entries visible for the selected plate.
+// ComUty_GeneBoardDraw at (x, y): original shared Genes page plate information.
+// The fixed Human Genes slot in Equip has a separate six-entry board below.
 void drawGeneBoard(App& app, cr::MenuPainter& m, float x, float y, int plate, float a) {
     if (!cr::isPlate(plate)) return;
-    const std::vector<int> entries = campPlateDisplayEntries(plate);
-    const int learned = int(std::count_if(entries.begin(), entries.end(),
-                                          [&](int entry) { return ownedCount(app, entry) > 0; }));
-    const int totalEntries = int(entries.size());
     const float dark[4] = {0, 0, 0, 0.6f * a}, white[4] = {1, 1, 1, 0.85f * a}, clear[4] = {1, 1, 1, 0};
     m.quad(x, y, 163, 236, dark, dark);
     const std::string name = itemName(app, plate);
     m.textCentred(name, x + (163 - m.textWidth(name, 14)) / 2, y + 10, false, a, 14);
     m.quad(x, y + 24, 163, 16, white, clear);
     m.picture(95, x + 24, y + 27, a);
-    drawShopNumber(m, learned, x + 90, y + 24, 1, 12, a, 2);
+    drawShopNumber(m, cr::plateLearned(app.game, plate), x + 90, y + 24, 1, 12, a, 2);
     m.picture(65, x + 102, y + 24, a);
-    drawShopNumber(m, totalEntries, x + 114, y + 24, 1, 12, a, 2);
+    drawShopNumber(m, 6, x + 114, y + 24, 1, 12, a, 2);
     static const char* const kArt[cr::kPlates] = {"gene_m001c.mct", "gene_m002c.mct", "gene_m201c.mct", "gene_m202c.mct",
                                                   "gene_m203c.mct", "gene_m204c.mct", "gene_m205c.mct", "gene_m206c.mct",
                                                   "gene_m207c.mct", "gene_m208c.mct", "gene_m209c.mct", "gene_m210c.mct",
@@ -6063,18 +6070,45 @@ void drawGeneBoard(App& app, cr::MenuPainter& m, float x, float y, int plate, fl
         m.image(art, x + (163 - w * k) / 2, y + 44, w * k, h * k, a);
     }
     float ly = y + 126;
-    for (int e : entries) {
+    for (int e : cr::plateContents(plate)) {
+        if (e <= 0) continue;
         const bool known = ownedCount(app, e) > 0;
-        // Human Warrior / Human Mage are ability plates. List their recorded abilities by name,
-        // without splitting them into the generic Gene / Skill categories.
-        if (campHumanPlate(plate)) {
-            if (!known) continue;
-            m.text(itemName(app, e), x + 12, ly, false, a, 12);
-        } else {
-            m.text(known ? itemName(app, e) : std::string("???"), x + 12, ly, false,
-                   known ? a : a * 0.5f, 12);
-            m.text(cr::isSkill(e) ? "Skill" : "Gene", x + 124, ly + 1, false, a * 0.55f, 10);
-        }
+        m.text(known ? itemName(app, e) : std::string("???"), x + 12, ly, false, known ? a : a * 0.5f, 12);
+        m.text(cr::isSkill(e) ? "Skill" : "Gene", x + 124, ly + 1, false, a * 0.55f, 10);
+        ly += 18;
+    }
+}
+
+// Equipment's fixed Human Genes screen is intentionally separate from the common Genes page.
+// Keep the same existing panel geometry, but show its six player-facing records and 2/6 count.
+void drawEquipHumanGeneBoard(App& app, cr::MenuPainter& m, float x, float y, int plate, float a) {
+    if (!campHumanPlate(plate)) return;
+    const std::vector<int> entries = campPlateDisplayEntries(plate);
+    const int learned = int(std::count_if(entries.begin(), entries.end(),
+                                          [&](int entry) { return ownedCount(app, entry) > 0; }));
+    const float dark[4] = {0, 0, 0, 0.6f * a}, white[4] = {1, 1, 1, 0.85f * a}, clear[4] = {1, 1, 1, 0};
+    m.quad(x, y, 163, 236, dark, dark);
+    const std::string name = itemName(app, plate);
+    m.textCentred(name, x + (163 - m.textWidth(name, 14)) / 2, y + 10, false, a, 14);
+    m.quad(x, y + 24, 163, 16, white, clear);
+    m.picture(95, x + 24, y + 27, a);
+    drawShopNumber(m, learned, x + 90, y + 24, 1, 12, a, 2);
+    m.picture(65, x + 102, y + 24, a);
+    drawShopNumber(m, 6, x + 114, y + 24, 1, 12, a, 2);
+    static const char* const kArt[2] = {"gene_m001c.mct", "gene_m002c.mct"};
+    cr::Texture& art = app.camp.plateArt[size_t(plate - cr::kFirstPlate)];
+    if (!art.id) {
+        cr::Image img;
+        if (loadImage(app, kArt[plate - cr::kFirstPlate], img)) art = app.renderer.upload(img);
+    }
+    if (art.id) {
+        const float w = float(art.width), h = float(art.height), k = std::min(76 / std::max(w, 1.0f), 76 / std::max(h, 1.0f));
+        m.image(art, x + (163 - w * k) / 2, y + 44, w * k, h * k, a);
+    }
+    float ly = y + 126;
+    for (int entry : entries) {
+        if (ownedCount(app, entry) <= 0) continue;
+        m.text(itemName(app, entry), x + 12, ly, false, a, 12);
         ly += 18;
     }
 }
@@ -7594,7 +7628,10 @@ void drawCamp(App& app) {
             left();
         } else if (c.phase == App::Camp::Entries && c.slot >= 3) {
             // A plate's known genes/skills are a real submenu, not the plate-selection list.
-            drawGeneBoard(app, m, 12, 92, c.plate, ease);
+            if (c.inspectOnlyPlate && c.slot == 3)
+                drawEquipHumanGeneBoard(app, m, 12, 92, c.plate, ease);
+            else
+                drawGeneBoard(app, m, 12, 92, c.plate, ease);
             helpBoard(item);
             right();
             scrollList(kRowX, int(c.list.size()), [&](int k, float x, float y, bool lit) {
@@ -7603,7 +7640,10 @@ void drawCamp(App& app) {
             left();
         } else if (c.slot >= 3) { // the gene-plate selection submenu
             // Keep the full Omega row width and use the same four-row clipped scroll window.
-            drawGeneBoard(app, m, 12, 92, item, ease); // the removal row (0) has no plate preview
+            if (c.inspectOnlyPlate && c.slot == 3 && campHumanPlate(item))
+                drawEquipHumanGeneBoard(app, m, 12, 92, item, ease);
+            else
+                drawGeneBoard(app, m, 12, 92, item, ease); // the removal row (0) has no plate preview
             helpBoard(item);
             right();
             scrollList(kRowX, int(c.list.size()), [&](int k, float x, float y, bool lit) {
@@ -14660,8 +14700,12 @@ int mobileInputSelfTest(App& app) {
     const std::vector<int> expectedMage{82, 84, 86, 132, 134, 136};
     problems += campPlateDisplayEntries(479) != expectedWarrior ||
                 campPlateDisplayEntries(480) != expectedMage;
-    problems += campKnownEntries(app, 479) != expectedWarrior ||
-                campKnownEntries(app, 480) != expectedMage;
+    const std::vector<int> fullWarrior{81, 83, 85, 87, 131, 133, 135, 137};
+    const std::vector<int> fullMage{82, 84, 86, 88, 132, 134, 136, 138};
+    problems += campKnownEntries(app, 479) != fullWarrior ||
+                campKnownEntries(app, 480) != fullMage;
+    problems += campKnownEquipHumanEntries(app, 479) != expectedWarrior ||
+                campKnownEquipHumanEntries(app, 480) != expectedMage;
     // Check the Equip-only nested flow: Warrior/Mage selector -> learned abilities -> selector -> slots.
     openCamp(app);
     auto& humanCamp = app.camp;
