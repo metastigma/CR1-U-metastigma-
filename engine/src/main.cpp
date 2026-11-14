@@ -19043,6 +19043,8 @@ void videoArgs(App& app, int argc, char** argv) {
     }
 }
 
+void refreshGamepad(App& app, SDL_JoystickID preferredId, bool reportFailure);
+
 SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     SDL_SetAppMetadata("Chaos Rings HD (reimplementation)", "0.1", "local.preservation.chaosrings");
@@ -19524,6 +19526,10 @@ SDL_AppResult SDL_AppInit(void** state, int argc, char** argv) {
     if (app->video.display != 0 && !isFullscreen)
         SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "window manager left the game windowed after fullscreen retries");
 #endif
+
+    // Enumerate once after SDL_INIT_GAMEPAD: SDL may not emit GAMEPAD_ADDED
+    // for a receiver that was already connected before the game started.
+    refreshGamepad(*app, 0, true);
     return SDL_APP_CONTINUE;
 }
 
