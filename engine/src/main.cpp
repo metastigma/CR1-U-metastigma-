@@ -5252,9 +5252,9 @@ constexpr float kMemberY = 176, kMemberStep = 56;
 constexpr int kCategoryKind[6] = {14, 3, 6, 7, 8, 10};         // make_item_list (0xc8660)
 constexpr int kCategoryLabel[6] = {58071, 58072, 58073, 58074, 58075, 58079}; // (0xc8640)
 constexpr float kRowX = 192, kRowY = 92, kRowH = 48;
-constexpr int kRows = 4;
-constexpr float kFocusY = 150, kListTop = 76, kListBottom = 280;
-constexpr float kGaugeX = 456, kGaugeY = 72, kGaugeH = 208;
+constexpr int kRows = 5; // five complete rows on the 4:3 menu; phones use four
+constexpr float kFocusY = 92, kListTop = 92, kListBottom = 332;
+constexpr float kGaugeX = 456, kGaugeY = 88, kGaugeH = 244;
 constexpr float kBackX = 192, kBackY = 344;
 constexpr float kPhoneBackY = 286; // 2.2.0's (__MuCamp_NextProc's box (192, 286, 256, 34)); it has no Save plate
 // kanIconNoTbl (0xc8740): a plate word's icon + 1
@@ -5418,6 +5418,12 @@ bool campScrollable(const App& app) {
                                   app.camp.page == App::Camp::Genes) &&
                                  (app.camp.phase == App::Camp::List || app.camp.phase == App::Camp::Entries));
 }
+int campRowsVisible(const App& app) { return app.renderer.phoneLayout() ? 4 : campui::kRows; }
+float campListTopY(const App& app) { return app.renderer.phoneLayout() ? 76.0f : campui::kListTop; }
+float campFocusLineY(const App& app) { return campListTopY(app); }
+float campListBottomY(const App& app) { return campListTopY(app) + campui::kRowH * float(campRowsVisible(app)); }
+float campGaugeY(const App& app) { return app.renderer.phoneLayout() ? 72.0f : campui::kGaugeY; }
+float campGaugeH(const App& app) { return campListBottomY(app) - campGaugeY(app); }
 int campScrollCount(const App& app) { return campSlotList(app) ? campui::kEquipSlots : int(app.camp.list.size()); }
 int campFocus(const App& app) { return campSlotList(app) ? app.camp.slot : app.camp.listCursor; }
 int campScrollKey(const App& app) {
@@ -5425,21 +5431,30 @@ int campScrollKey(const App& app) {
     return int(c.page) * 10000000 + int(c.phase) * 1000000 + c.category * 10000 + c.member * 1000 +
            (c.phase == App::Camp::Entries ? c.plate : 0);
 }
+int campScrollFirstRow(const App& app, int focus, int count) {
+    const int visible = campRowsVisible(app);
+    return std::clamp(focus - visible / 2, 0, std::max(0, count - visible));
+}
 float campScrollPx(const App& app) {
-    return app.camp.scrollKey == campScrollKey(app) ? app.camp.scroll : campui::kRowH * float(campFocus(app));
+    const int n = campScrollCount(app);
+    const float target = campui::kRowH * float(campScrollFirstRow(app, campFocus(app), n));
+    return app.camp.scrollKey == campScrollKey(app) ? app.camp.scroll : target;
 }
 int campVisualFocus(const App& app) {
     const int n = campScrollCount(app);
-    return n > 0 ? std::clamp(int((campScrollPx(app) + 28.0f) / campui::kRowH), 0, n - 1) : 0;
+    return n > 0 ? std::clamp(campFocus(app), 0, n - 1) : 0;
 }
-float campScrollThumbLength(int n) {
-    return n > 0 ? std::max(24.0f, std::floor((campui::kGaugeH - 24.0f) * 2.0f / float(n))) : 24.0f;
+float campScrollThumbLength(const App& app, int n) {
+    const float track = std::max(1.0f, campGaugeH(app) - 24.0f);
+    return n > 0 ? std::max(24.0f, std::floor(track * float(campRowsVisible(app)) / float(n))) : 24.0f;
 }
-float campScrollThumbOffset(float scroll, int n) {
-    if (n <= 2) return 0;
-    const float len = campScrollThumbLength(n);
-    return std::clamp(std::floor((196.0f - len) * scroll / (campui::kRowH * float(n - 2))),
-                      0.0f, campui::kGaugeH - 24.0f - len + 10.0f);
+float campScrollThumbOffset(const App& app, float scroll, int n) {
+    const int maxTop = std::max(0, n - campRowsVisible(app));
+    if (maxTop <= 0) return 0;
+    const float len = campScrollThumbLength(app, n);
+    const float maxAt = std::max(0.0f, campGaugeH(app) - 14.0f - len);
+    const float top = std::clamp(scroll / campui::kRowH, 0.0f, float(maxTop));
+    return std::floor(maxAt * top / float(maxTop));
 }
 void campScrollTo(App& app, int index, bool jump = false) {
     if (!campScrollable(app)) return;
@@ -5449,16 +5464,18 @@ void campScrollTo(App& app, int index, bool jump = false) {
     const int n = campScrollCount(app);
     if (n <= 0) return;
     const int next = std::clamp(index, 0, n - 1), before = cursor;
-    cursor = next; top = next;
+    const int first = campScrollFirstRow(app, next, n);
+    cursor = next;
+    top = first;
     if (before != next) menuSound(app, se::kCursor);
-    if (jump) c.scroll = campui::kRowH * float(next), c.scrollKey = campScrollKey(app);
+    if (jump) c.scroll = campui::kRowH * float(first), c.scrollKey = campScrollKey(app);
 }
 void campScrollFromBar(App& app, float centreY, bool jump) {
     const int n = campScrollCount(app);
     if (!campScrollable(app) || n <= 0) return;
-    const float len = campScrollThumbLength(n);
-    const float travel = std::max(1.0f, campui::kGaugeH - 24.0f - len + 10.0f);
-    const float firstCentre = campui::kGaugeY + 12.0f + len * 0.5f;
+    const float len = campScrollThumbLength(app, n);
+    const float travel = std::max(1.0f, campGaugeH(app) - 14.0f - len);
+    const float firstCentre = campGaugeY(app) + 12.0f + len * 0.5f;
     const float t = std::clamp((centreY - firstCentre) / travel, 0.0f, 1.0f);
     campScrollTo(app, int(std::lround(t * float(n - 1))), jump);
 }
@@ -5467,7 +5484,7 @@ void stepCampScroll(App& app, float dt) {
     if (!app.campOpen || !campScrollable(app)) return;
     App::Camp& c = app.camp;
     const int key = campScrollKey(app);
-    const float target = campui::kRowH * float(campFocus(app));
+    const float target = campui::kRowH * float(campScrollFirstRow(app, campFocus(app), campScrollCount(app)));
     if (c.scrollKey != key || std::fabs(target - c.scroll) > campui::kRowH) {
         c.scrollKey = key; c.scroll = target; return;
     }
@@ -5505,7 +5522,7 @@ void campRefreshList(App& app) {
     else if (c.page == App::Camp::Equip) c.list = campEquipList(app, campCharacter(app, c.member), c.slot);
     else if (c.page == App::Camp::Genes) { c.list.clear(); for (int p = cr::kFirstPlate; p < cr::kFirstPlate + cr::kPlates; ++p) if (ownedCount(app,p)>0) c.list.push_back(p); }
     c.listCursor = std::clamp(c.listCursor, 0, std::max(0, int(c.list.size()) - 1));
-    c.listTop = c.listCursor;
+    c.listTop = campScrollFirstRow(app, c.listCursor, int(c.list.size()));
 }
 
 // Items: the next category that holds anything, `dir` from the current (the current one too if 0)
@@ -5757,13 +5774,14 @@ void campClick(App& app, float px, float py) {
             if (in(kPlateX + 200 * (1 - campEase(app)), kMemberY + kMemberStep * float(k), 136, 40)) { c.member = k; if (c.phase == App::Camp::Member) campChoose(app); return; }
         return;
     }
-    if (campScrollable(app) && campScrollCount(app) > kRows) {
-        if (in(campui::kGaugeX - 4, campui::kGaugeY - 14, 24, 20)) { campScrollBy(app, -1); return; }
-        if (in(campui::kGaugeX - 4, campui::kGaugeY + campui::kGaugeH - 2, 24, 20)) { campScrollBy(app, 1); return; }
+    if (campScrollable(app) && campScrollCount(app) > campRowsVisible(app)) {
+        const float gy = campGaugeY(app), gh = campGaugeH(app);
+        if (in(campui::kGaugeX - 4, gy - 14, 24, 20)) { campScrollBy(app, -1); return; }
+        if (in(campui::kGaugeX - 4, gy + gh - 2, 24, 20)) { campScrollBy(app, 1); return; }
     }
     if (campSlotList(app) || c.phase == App::Camp::List || c.phase == App::Camp::Entries) {
-        if (in(campListX(app), campui::kListTop, 256, campui::kListBottom - campui::kListTop)) {
-            const int index = int(std::floor((my - campui::kFocusY + campScrollPx(app)) / campui::kRowH));
+        if (in(campListX(app), campListTopY(app), 256, campListBottomY(app) - campListTopY(app))) {
+            const int index = int(std::floor((my - campFocusLineY(app) + campScrollPx(app)) / campui::kRowH));
             const int n = campScrollCount(app);
             if (index >= 0 && index < n) {
                 if (index == campVisualFocus(app)) {
@@ -5798,12 +5816,13 @@ void campPointerDown(App& app, float px, float py) {
     campPointerPoint(app, px, py, p.startX, p.startY);
     p.lastY = p.startY;
     const int n = campScrollCount(app);
-    p.bar = campScrollable(app) && n > campui::kRows &&
+    const float gy = campGaugeY(app), gh = campGaugeH(app);
+    p.bar = campScrollable(app) && n > campRowsVisible(app) &&
             p.startX >= campui::kGaugeX - 4 && p.startX < campui::kGaugeX + 20 &&
-            p.startY >= campui::kGaugeY - 14 && p.startY < campui::kGaugeY + campui::kGaugeH + 14;
+            p.startY >= gy - 14 && p.startY < gy + gh + 14;
     if (p.bar) {
-        const float len = campScrollThumbLength(n);
-        const float thumbY = campui::kGaugeY + 12 + campScrollThumbOffset(campScrollPx(app), n);
+        const float len = campScrollThumbLength(app, n);
+        const float thumbY = gy + 12 + campScrollThumbOffset(app, campScrollPx(app), n);
         p.barGrab = p.startY >= thumbY && p.startY <= thumbY + len
                         ? p.startY - (thumbY + len * 0.5f)
                         : 0.0f;
@@ -5821,7 +5840,7 @@ void campPointerMove(App& app, float px, float py) {
     campPointerPoint(app, px, py, mx, my);
     const bool list = campScrollable(app);
     const bool inList = p.startX >= campListX(app) && p.startX < campListX(app) + 256 &&
-                        p.startY >= campui::kListTop && p.startY < campui::kListBottom;
+                        p.startY >= campListTopY(app) && p.startY < campListBottomY(app);
     if (std::fabs(mx - p.startX) > 6 || std::fabs(my - p.startY) > 6) p.dragging = true;
     if (list && p.bar && p.dragging) {
         campScrollFromBar(app, my - p.barGrab, true);
@@ -5847,6 +5866,11 @@ void campPointerUp(App& app, float px, float py) {
 }
 
 // A list row (ComUty_CampItemPlate): plate 8 / 9, the icon, the name, the count at (222, 30)
+int campEquipSlotItem(const cr::PartyMember& pm, int slot) {
+    const int worn = slot < 3 ? pm.equip[size_t(slot)] : pm.genes[size_t(slot - 3)];
+    return worn > 0 ? worn : slot == 2 ? 0x1c6 : slot >= 3 ? 0x1c7 + (slot - 3) : 0;
+}
+
 void drawCampRow(App& app, cr::MenuPainter& m, float x, float y, int item, int count, bool lit, float a,
                  const std::string& label = std::string(), bool worn = false) {
     m.picture(lit ? 9 : 8, x, y, a);
@@ -5890,15 +5914,15 @@ void drawGeneAbilityRow(App& app, cr::MenuPainter& m, float x, float y, int it, 
     drawShopNumber(m, cost, x + 218, y + 30, 3, 10, a, 0);
 }
 
-void drawCampScrollBar(cr::MenuPainter& m, float scroll, int n, float a) {
+void drawCampScrollBar(App& app, cr::MenuPainter& m, float scroll, int n, float a) {
     using namespace campui;
-    if (n <= kRows) return;
-    const float sx = kGaugeX, y = kGaugeY, h = kGaugeH;
+    if (n <= campRowsVisible(app)) return;
+    const float sx = kGaugeX, y = campGaugeY(app), h = campGaugeH(app);
     const float dark[4] = {0.05f, 0.05f, 0.08f, 0.8f * a};
     m.quad(sx, y, 8, h, dark, dark);
     m.picture(76, sx - 4, y - 14, a);
     m.picture(77, sx - 4, y + h - 2, a);
-    const float len = campScrollThumbLength(n), at = campScrollThumbOffset(scroll, n);
+    const float len = campScrollThumbLength(app, n), at = campScrollThumbOffset(app, scroll, n);
     m.piece(sx, y + 12 + at, 160, 196, 16, 12, a);
     if (len > 20) m.pieceTo(sx, y + 24 + at, 16, len - 20, 160, 208, 16, 4, a);
     m.piece(sx, y + 4 + at + len, 160, 212, 16, 8, a);
@@ -7368,14 +7392,15 @@ void drawCamp(App& app) {
     const int item = c.list.empty() ? 0 : c.list[size_t(c.listCursor)];
     const float scroll = campScrollPx(app);
     const int visualFocus = campVisualFocus(app);
+    const float listTop = campListTopY(app), listBottom = campListBottomY(app);
     auto scrollList = [&](float x, int n, auto&& row) {
-        m.setClip(kListTop, kListBottom);
+        m.setClip(listTop, listBottom);
         for (int k = 0; k < n; ++k) {
-            const float y = kFocusY + kRowH * float(k) - scroll;
-            if (y + kRowH > kListTop && y < kListBottom) row(k, x, y, k == visualFocus);
+            const float y = campFocusLineY(app) + kRowH * float(k) - scroll;
+            if (y + kRowH > listTop && y < listBottom) row(k, x, y, k == visualFocus);
         }
         m.clearClip();
-        drawCampScrollBar(m, scroll, n, ease);
+        drawCampScrollBar(app, m, scroll, n, ease);
     };
     auto memberPlates = [&](bool lit) {
         right();
@@ -7442,9 +7467,10 @@ void drawCamp(App& app) {
             drawShopBoard(app, 12, 92, ch, 0, ease);
             right();
             scrollList(kRowX, kEquipSlots, [&](int slot, float x, float y, bool lit) {
+                const int shown = campEquipSlotItem(pm, slot);
                 const int worn = slot < 3 ? pm.equip[size_t(slot)] : pm.genes[size_t(slot - 3)];
-                drawCampRow(app, m, x, y, worn, 0, lit, slot == 3 ? ease * 0.7f : ease,
-                            sysText(app, 58061 + slot), worn > 0);
+                // Placeholder item IDs provide the localized first-line name, as in Omega.
+                drawCampRow(app, m, x, y, shown, 0, lit, ease, std::string(), worn > 0);
             });
             left();
         } else if (c.phase == App::Camp::Entries && c.slot >= 3) {
@@ -14531,37 +14557,56 @@ int mobileInputSelfTest(App& app) {
         applyVideo(app);
         app.renderer.beginFrame(1280, 720);
         app.renderer.endFrame(false);
+        const int visibleRows = campRowsVisible(app);
+        problems += campListBottomY(app) - campListTopY(app) != visibleRows * campui::kRowH;
         for (auto page : {App::Camp::Items, App::Camp::Genes}) {
             openCamp(app);
             auto& c = app.camp;
             campOpenPage(app, page == App::Camp::Items ? 0 : 2);
             c.anim = 8;
-            if (c.list.size() <= 6) { ++problems; continue; }
-            pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, campListX(app) + 60, 250);
-            pointer(SDL_EVENT_MOUSE_MOTION, campListX(app) + 60, 150);
-            pointer(SDL_EVENT_MOUSE_BUTTON_UP, campListX(app) + 60, 150);
-            bool ok = c.listTop == 2 && c.phase == App::Camp::List;
+            if (c.list.size() <= size_t(visibleRows + 1)) { ++problems; continue; }
+
+            // A two-row swipe advances the selected row and keeps the viewport aligned to complete rows.
+            const float rowBottom = campFocusLineY(app) + campui::kRowH * float(visibleRows - 1) + 20;
+            const float rowTwo = campFocusLineY(app) + campui::kRowH + 20;
+            pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, campListX(app) + 60, rowBottom);
+            pointer(SDL_EVENT_MOUSE_MOTION, campListX(app) + 60, rowTwo);
+            pointer(SDL_EVENT_MOUSE_BUTTON_UP, campListX(app) + 60, rowTwo);
+            bool ok = c.listCursor == 2 && c.listTop == campScrollFirstRow(app, 2, int(c.list.size())) &&
+                      c.phase == App::Camp::List;
+
             SDL_Event wheel{};
             wheel.type = SDL_EVENT_MOUSE_WHEEL, wheel.wheel.y = -1;
             SDL_AppEvent(&app, &wheel);
-            ok &= c.listTop == 3;
-            pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, 468, 140);
-            pointer(SDL_EVENT_MOUSE_MOTION, 468, 284);
-            pointer(SDL_EVENT_MOUSE_BUTTON_UP, 468, 284);
-            ok &= c.listTop == int(c.list.size()) - campui::kRows;
-            pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, 468, 250);
-            pointer(SDL_EVENT_MOUSE_MOTION, 468, 92);
-            pointer(SDL_EVENT_MOUSE_BUTTON_UP, 468, 92);
+            ok &= c.listCursor == 3 && c.listTop == campScrollFirstRow(app, 3, int(c.list.size()));
+
+            const float barMid = campGaugeY(app) + campGaugeH(app) * 0.5f;
+            const float barEnd = campGaugeY(app) + campGaugeH(app) + 80;
+            pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, 468, barMid);
+            pointer(SDL_EVENT_MOUSE_MOTION, 468, barEnd);
+            pointer(SDL_EVENT_MOUSE_BUTTON_UP, 468, barEnd);
+            ok &= c.listTop == int(c.list.size()) - visibleRows;
+
+            const float barTop = campGaugeY(app) - 80;
+            pointer(SDL_EVENT_MOUSE_BUTTON_DOWN, 468, barMid);
+            pointer(SDL_EVENT_MOUSE_MOTION, 468, barTop);
+            pointer(SDL_EVENT_MOUSE_BUTTON_UP, 468, barTop);
             ok &= c.listTop == 0;
-            tap(468, 292);
-            ok &= c.listTop == 1;
-            tap(468, 82);
+
+            tap(468, campGaugeY(app) + campGaugeH(app) + 8);
+            ok &= c.listTop == int(c.list.size()) - visibleRows;
+            tap(468, campGaugeY(app) - 8);
             ok &= c.listTop == 0;
-            // A tap after scrolling still chooses the visible row, rather than the old top.
-            c.listTop = 2;
-            tap(campListX(app) + 60, campui::kRowY + campui::kRowH + 20);
-            ok &= c.listCursor == 3;
-            if (!ok) std::printf("mobile input: layout %d wide %d page %d FAILED (top %d cursor %d phase %d)\n",
+
+            // A tap after scrolling chooses the row at the clicked viewport position.
+            c.listCursor = std::min(4, int(c.list.size()) - 1);
+            c.listTop = campScrollFirstRow(app, c.listCursor, int(c.list.size()));
+            c.scroll = campui::kRowH * float(c.listTop);
+            c.scrollKey = campScrollKey(app);
+            const int clicked = c.listTop + 1;
+            tap(campListX(app) + 60, campFocusLineY(app) + campui::kRowH + 20);
+            ok &= c.listCursor == clicked;
+            if (!ok) std::printf("mobile input: layout %d wide %d page %d FAILED (top %d cursor %d phase %d)\\n",
                                       layout, wide, int(page), c.listTop, c.listCursor, int(c.phase));
             problems += !ok;
             ++gestures;
@@ -14571,12 +14616,15 @@ int mobileInputSelfTest(App& app) {
             auto& c = app.camp;
             c.page = App::Camp::Equip, c.phase = App::Camp::Slot, c.anim = anim;
             c.slot = slot;
-            c.scroll = campui::kRowH * float(slot);
+            const int top = campScrollFirstRow(app, slot, campui::kEquipSlots);
+            c.slotTop = top;
+            c.scroll = campui::kRowH * float(top);
             c.scrollKey = campScrollKey(app);
-            tap(campListX(app) + 60, campui::kFocusY + 20);
+            const float rowY = campFocusLineY(app) + campui::kRowH * float(slot - top) + 20;
+            tap(campListX(app) + 60, rowY);
             const bool ok = c.slot == slot && (slot == 3 ? c.phase == App::Camp::Slot : c.phase == App::Camp::List);
             problems += !ok;
-            if (!ok) std::printf("mobile equipment: layout %d wide %d anim %d slot %d FAILED\n", layout, wide, anim, slot);
+            if (!ok) std::printf("mobile equipment: layout %d wide %d anim %d slot %d FAILED\\n", layout, wide, anim, slot);
             ++slots;
         }
     }
