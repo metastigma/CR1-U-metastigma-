@@ -19555,6 +19555,43 @@ bool consumeGraphicsReset(App& app) {
     return false;
 }
 
+void closeGamepad(App& app) {
+    if (!app.pad) return;
+    setSceneSkip(app, crinput::HeldSource::Gamepad, false);
+    SDL_CloseGamepad(app.pad);
+    app.pad = nullptr;
+    app.padHeld = -1;
+    app.padHeldFor = 0;
+    app.padHeldOver.cancel();
+}
+void refreshGamepad(App& app, SDL_JoystickID preferredId, bool reportFailure) {
+    SDL_JoystickID selectedId = preferredId;
+    if (selectedId == 0) {
+        if (app.pad && SDL_GamepadConnected(app.pad)) return;
+        int count = 0;
+        SDL_JoystickID* devices = SDL_GetGamepads(&count);
+        if (!devices) {
+            if (reportFailure) SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "controller: SDL_GetGamepads failed: %s", SDL_GetError());
+            return;
+        }
+        if (count > 0) selectedId = devices[0];
+        SDL_free(devices);
+    }
+    if (selectedId == 0) {
+        if (reportFailure) SDL_Log("controller: no mapped gamepads currently available");
+        return;
+    }
+    if (app.pad && SDL_GamepadConnected(app.pad) && SDL_GetGamepadID(app.pad) == selectedId) return;
+    SDL_Gamepad* candidate = SDL_OpenGamepad(selectedId);
+    if (!candidate) {
+        if (reportFailure) SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "controller: could not open gamepad %u: %s", unsigned(selectedId), SDL_GetError());
+        return;
+    }
+    if (app.pad) closeGamepad(app);
+    app.pad = candidate;
+    SDL_Log("controller: %s (instance %u)", SDL_GetGamepadName(app.pad), unsigned(SDL_GetGamepadID(app.pad)));
+}
+
 SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
     auto& app = *static_cast<App*>(state);
     if (event->type == SDL_EVENT_RENDER_DEVICE_RESET) {
@@ -19568,16 +19605,12 @@ SDL_AppResult SDL_AppEvent(void* state, SDL_Event* event) {
     case SDL_EVENT_QUIT:
         return SDL_APP_SUCCESS;
     case SDL_EVENT_GAMEPAD_ADDED:
-        if (!app.pad) {
-            app.pad = SDL_OpenGamepad(event->gdevice.which);
-            if (app.pad) SDL_Log("controller: %s", SDL_GetGamepadName(app.pad));
-        }
+        refreshGamepad(app, event->gdevice.which, true);
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
         if (app.pad && SDL_GetGamepadID(app.pad) == event->gdevice.which) {
-            SDL_CloseGamepad(app.pad);
-            app.pad = nullptr;
-            setSceneSkip(app, crinput::HeldSource::Gamepad, false);
+            closeGamepad(app);
+            refreshGamepad(app, 0, false);
         }
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
