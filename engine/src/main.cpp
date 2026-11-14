@@ -14623,6 +14623,16 @@ int mobileInputSelfTest(App& app) {
     problems += campEmptyEquipSlotItem(2) != 474 || campEmptyEquipSlotItem(3) != 0 ||
                 campEmptyEquipSlotItem(4) != 476 || campEmptyEquipSlotItem(5) != 477 ||
                 campEmptyEquipSlotItem(6) != 478;
+    if (app.itemTable.loaded()) {
+        const cr::ItemParam* emptyJewel = app.itemTable.item(474);
+        const cr::ItemParam* emptyGene1 = app.itemTable.item(476);
+        const cr::ItemParam* emptyGene2 = app.itemTable.item(477);
+        const cr::ItemParam* emptyGene3 = app.itemTable.item(478);
+        problems += !emptyJewel || emptyJewel->icon != 4 ||
+                    !emptyGene1 || emptyGene1->icon != 62 ||
+                    !emptyGene2 || emptyGene2->icon != 62 ||
+                    !emptyGene3 || emptyGene3->icon != 62;
+    }
     for (int character = 0; character < cr::kCharacters; ++character) {
         const int ability = campHumanAbilityItem(character);
         const auto& humanEntries = cr::plateContents(cr::humanPlate(character));
