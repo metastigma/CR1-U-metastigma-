@@ -422,7 +422,7 @@ struct App {
         int listCursor = 0, listTop = 0;
         int plate = 0, plateCursor = 0, plateTop = 0;
         int pendingPlate = 0;               // Equip: selected plate awaiting the original Yes / No prompt
-        bool inspectOnlyPlate = false;       // Equip: fixed Human Genes is a read-only plate view
+        bool inspectOnlyPlate = false;       // Equip: Human Warrior/Mage selector and its read-only abilities submenu
         int member = 0;                    // the pair's first or second
         int slot = 0, slotTop = 0;         // Equip: seven scrolling slots
         int count = 1, confirm = 0;        // Items: how many seeds, Yes / No
@@ -5601,10 +5601,13 @@ void campOpenEntries(App& app, int plate) {
 void campCloseEntries(App& app) {
     App::Camp& c = app.camp;
     c.plate = 0; c.anim = 0; c.animClock = 0;
-    if (c.inspectOnlyPlate) {
-        c.inspectOnlyPlate = false;
-        c.phase = App::Camp::Slot;
-        c.listCursor = c.listTop = 0;
+    if (c.inspectOnlyPlate && c.slot == 3) {
+        // First Back leaves the selected Human plate's ability list and returns to
+        // the Warrior / Mage selector. A second Back leaves that selector for Equip slots.
+        c.phase = App::Camp::List;
+        c.listCursor = c.plateCursor;
+        c.listTop = c.plateTop;
+        campRefreshList(app);
         return;
     }
     c.phase = App::Camp::List;
@@ -5748,8 +5751,14 @@ void campChoose(App& app) {
             c.phase = App::Camp::Slot;
         } else if (c.phase == App::Camp::List && !c.list.empty() && c.slot >= 3) {
             if (c.slot == 3 && c.inspectOnlyPlate) {
-                if (!campHumanPlate(item)) menuSound(app, se::kBuzzer);
-                else menuSound(app, se::kChoose); // selection previews the plate; it never equips/replaces Human Genes
+                if (!campHumanPlate(item)) {
+                    menuSound(app, se::kBuzzer);
+                    return;
+                }
+                // Confirming Warrior / Mage opens that plate's own learned-ability submenu.
+                // Human Genes is fixed: inspecting its contents must never replace the slot.
+                menuSound(app, se::kChoose);
+                campOpenEntries(app, item);
                 return;
             }
             if (!cr::isPlate(item) || ownedCount(app, item) <= 0) {
@@ -14653,6 +14662,33 @@ int mobileInputSelfTest(App& app) {
                 campPlateDisplayEntries(480) != expectedMage;
     problems += campKnownEntries(app, 479) != expectedWarrior ||
                 campKnownEntries(app, 480) != expectedMage;
+    // Check the Equip-only nested flow: Warrior/Mage selector -> learned abilities -> selector -> slots.
+    openCamp(app);
+    auto& humanCamp = app.camp;
+    humanCamp.page = App::Camp::Equip;
+    humanCamp.phase = App::Camp::List;
+    humanCamp.slot = 3;
+    humanCamp.inspectOnlyPlate = true;
+    humanCamp.list = {479, 480};
+    humanCamp.listCursor = 0;
+    humanCamp.listTop = 0;
+    campOpenEntries(app, 479);
+    problems += humanCamp.phase != App::Camp::Entries || humanCamp.plate != 479 ||
+                humanCamp.list != expectedWarrior;
+    campCloseEntries(app);
+    problems += humanCamp.phase != App::Camp::List || !humanCamp.inspectOnlyPlate ||
+                humanCamp.list != std::vector<int>({479, 480}) || humanCamp.listCursor != 0;
+    humanCamp.listCursor = 1;
+    campOpenEntries(app, 480);
+    problems += humanCamp.phase != App::Camp::Entries || humanCamp.plate != 480 ||
+                humanCamp.list != expectedMage;
+    campCloseEntries(app);
+    problems += humanCamp.phase != App::Camp::List || !humanCamp.inspectOnlyPlate ||
+                humanCamp.listCursor != 1;
+    campBack(app);
+    problems += humanCamp.phase != App::Camp::Slot || humanCamp.inspectOnlyPlate ||
+                !humanCamp.list.empty();
+    app.campOpen = false;
     // These reserve records stay in game data; the board only presents its six visible entries.
     const auto& fullWarrior = cr::plateContents(479);
     const auto& fullMage = cr::plateContents(480);
