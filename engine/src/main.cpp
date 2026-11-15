@@ -431,6 +431,9 @@ struct App {
         int anim = 0;
         float animClock = 0, scroll = 0;
         int scrollKey = -1;
+        int helpPage = -1, helpPhase = -1, helpSlot = -1, helpMember = -1, helpPlate = -1, helpItem = -1;
+        int helpAnim = 0;
+        float helpClock = 0;
         std::array<cr::Texture, 22> plateArt; // gene_m*c.mct, loaded when a board first shows them
     } camp;
     struct CampPointer {
@@ -5380,17 +5383,11 @@ std::vector<int> campItems(const App& app, int category) {
 // What can go in member c's slot: the bag's items of the slot's kind that c may wear
 std::vector<int> campEquipList(const App& app, int c, int slot) {
     std::vector<int> out;
-    if (slot >= 3) { // Human Genes stay; monster Gene slots list owned plates and the current removal option
+    if (slot >= 3) { // Human Genes stay; monster slots show every owned plate, then Remove
         if (slot == 3) return out;
-        const cr::PartyMember& pm = app.game.party[size_t(c)];
-        if (pm.genes[size_t(slot - 3)] > 0) out.push_back(0); // remove this monster Gene
-        for (int p = cr::kFirstPlate + 2; p < cr::kFirstPlate + cr::kPlates; ++p) {
-            if (ownedCount(app, p) <= 0) continue;
-            bool worn = false;
-            for (int k = 0; k < 2; ++k)
-                for (int g : app.game.party[size_t(campCharacter(app, k))].genes) worn |= g == p;
-            if (!worn) out.push_back(p);
-        }
+        for (int p = cr::kFirstPlate + 2; p < cr::kFirstPlate + cr::kPlates; ++p)
+            if (ownedCount(app, p) > 0) out.push_back(p);
+        out.push_back(0); // icon-only Remove button at the bottom
         return out;
     }
     const int kind = slot == cr::kWeapon ? cr::kKindWeapon : slot == cr::kArmor ? cr::kKindArmor : cr::kKindJewel;
@@ -5498,6 +5495,36 @@ void stepCampScroll(App& app, float dt) {
     const float amount = 160.0f * std::clamp(dt, 0.0f, 0.1f);
     if (c.scroll < target) c.scroll = std::min(target, c.scroll + amount);
     else if (c.scroll > target) c.scroll = std::max(target, c.scroll - amount);
+}
+int campHelpItem(const App& app) {
+    const App::Camp& c = app.camp;
+    const bool hasHelp = (c.page == App::Camp::Items && c.phase == App::Camp::List) ||
+                         (c.page == App::Camp::Equip && (c.phase == App::Camp::List || c.phase == App::Camp::Entries)) ||
+                         (c.page == App::Camp::Genes && (c.phase == App::Camp::List || c.phase == App::Camp::Entries));
+    if (!hasHelp || c.list.empty()) return 0;
+    return c.list[size_t(std::clamp(c.listCursor, 0, int(c.list.size()) - 1))];
+}
+void stepCampHelp(App& app, float dt) {
+    if (!app.campOpen || app.optionsOpen) return;
+    App::Camp& c = app.camp;
+    const int item = campHelpItem(app);
+    const int plate = c.phase == App::Camp::Entries ? c.plate : 0;
+    if (item <= 0) {
+        c.helpPage = int(c.page); c.helpPhase = int(c.phase);
+        c.helpSlot = c.slot; c.helpMember = c.member; c.helpPlate = plate; c.helpItem = 0;
+        c.helpAnim = 0; c.helpClock = 0;
+        return;
+    }
+    if (c.helpPage != int(c.page) || c.helpPhase != int(c.phase) || c.helpSlot != c.slot ||
+        c.helpMember != c.member || c.helpPlate != plate || c.helpItem != item) {
+        c.helpPage = int(c.page); c.helpPhase = int(c.phase);
+        c.helpSlot = c.slot; c.helpMember = c.member; c.helpPlate = plate; c.helpItem = item;
+        c.helpAnim = 0; c.helpClock = 0;
+    }
+    for (c.helpClock += std::clamp(dt, 0.0f, 0.1f);
+         c.helpClock >= 1.0f / kFramesPerSecond && c.helpAnim < 16;
+         c.helpClock -= 1.0f / kFramesPerSecond)
+        ++c.helpAnim;
 }
 float campListX(const App& app) {
     return campui::kRowX + (app.camp.page == App::Camp::Items ? 160 * (1 - campEase(app)) : 0);
@@ -5787,11 +5814,29 @@ void campChoose(App& app) {
                 campOpenEntries(app, item);
             }
         } else if (c.phase == App::Camp::Entries && c.slot >= 3 && cr::isPlate(c.plate)) {
-            if (c.inspectOnlyPlate) {
-                menuSound(app, se::kChoose);
+            cr::PartyMember& member = app.game.party[size_t(campCharacter(app, c.member))];
+            if (c.inspectOnlyPlate && c.slot == 3) {
+                // Confirming any learned Human ability/skill equips the selected Human plate.
+                member.genes[0] = c.plate;
+                c.plate = 0;
+                c.inspectOnlyPlate = false;
+                c.listCursor = c.listTop = 0;
+                c.phase = App::Camp::Slot;
+                menuSound(app, campui::kSoundEquip);
                 return;
             }
-            app.game.party[size_t(campCharacter(app,c.member))].genes[c.slot-3]=c.plate; menuSound(app,campui::kSoundEquip); c.plate=0; c.phase=App::Camp::Slot;
+            // Move an already-worn monster plate rather than duplicating it between slots.
+            for (int pairIndex = 0; pairIndex < 2; ++pairIndex) {
+                cr::PartyMember& pairMember = app.game.party[size_t(campCharacter(app, pairIndex))];
+                for (int geneSlot = 1; geneSlot < cr::kGeneSlots; ++geneSlot) {
+                    if (&pairMember == &member && geneSlot == c.slot - 3) continue;
+                    if (pairMember.genes[geneSlot] == c.plate) pairMember.genes[geneSlot] = 0;
+                }
+            }
+            member.genes[c.slot - 3] = c.plate;
+            c.plate = 0;
+            c.phase = App::Camp::Slot;
+            menuSound(app, campui::kSoundEquip);
         } else if (c.phase == App::Camp::List && !c.list.empty()) {
             int& worn = app.game.party[size_t(campCharacter(app, c.member))].equip[c.slot];
             if (worn > 0) app.game.items[worn] = std::min(cr::kMaxItemCount, ownedCount(app, worn) + 1);
@@ -6020,6 +6065,14 @@ void drawGeneRow(App& app, cr::MenuPainter& m, float x, float y, int plate, bool
     if (known >= total) m.picture(96, x + 176, y + 24, a);
     else
         for (int k = 0; k < total; ++k) m.picture(k < total - known ? 10 : 11, x + 251 - 14 * float(total) + 14 * float(k), y + 30, a);
+}
+
+void drawCampRemoveGeneRow(App& app, cr::MenuPainter& m, float x, float y, int slot, bool lit, float a) {
+    m.picture(lit ? 9 : 8, x, y, a);
+    const int iconItem = campEmptyEquipSlotItem(slot);
+    if (const cr::ItemParam* p = app.itemTable.item(iconItem); p && p->icon >= 0)
+        m.piece(x + 12, y + 8, float(p->icon % 16) * 32, 248 + float(p->icon / 16) * 32, 32, 32, a);
+    // Icon-only Remove button: deliberately no text label or dash.
 }
 
 void drawGeneAbilityRow(App& app, cr::MenuPainter& m, float x, float y, int it, int ch, bool lit, float a) {
@@ -7565,8 +7618,8 @@ void drawCamp(App& app) {
     auto helpBoard = [&](int it) { // ComUty_HelpWindowDraw: original 336 x 68 panel and HELP tag
         if (it <= 0) return;
         right();
-        const float helpT = std::min(1.0f, float(c.anim) / 16.0f);
-        const float helpEase = 1 - (1 - helpT) * (1 - helpT);
+        const float helpT = std::min(1.0f, float(c.helpAnim) / 16.0f);
+        const float helpEase = helpT * helpT * (3.0f - 2.0f * helpT);
         const float slide = 480 * (1 - helpEase);
         m.picture(17, 144 + slide, 8, helpEase);
         m.picture(18, 144 + slide, -4, helpEase);
@@ -7655,6 +7708,7 @@ void drawCamp(App& app) {
                 const int it = c.list[size_t(k)];
                 const bool worn = std::find(std::begin(pm.genes), std::end(pm.genes), it) != std::end(pm.genes);
                 if (cr::isPlate(it)) drawGeneRow(app, m, x, y, it, lit, worn, ease);
+                else if (it == 0 && c.slot >= 4) drawCampRemoveGeneRow(app, m, x, y, c.slot, lit, ease);
                 else drawCampRow(app, m, x, y, it, 0, lit, ease);
             });
             left();
@@ -13527,6 +13581,7 @@ void drawFrame(App& app, bool present = true) {
     if (app.campOpen && !app.optionsOpen) {
         for (app.camp.animClock += dt; app.camp.animClock >= 1.0f / kFramesPerSecond; app.camp.animClock -= 1.0f / kFramesPerSecond) ++app.camp.anim;
         stepCampScroll(app, dt);
+        stepCampHelp(app, dt);
         drawCamp(app);
     }
     if (app.mapScreen.open) {
