@@ -14751,8 +14751,12 @@ int mobileInputSelfTest(App& app) {
 
     // Monster Gene slots 1..3 must retain the original plate -> abilities -> equip flow.
     const int firstMember = campCharacter(app, 0), secondMember = campCharacter(app, 1);
-    const auto savedFirstGenes = app.game.party[size_t(firstMember)].genes;
-    const auto savedSecondGenes = app.game.party[size_t(secondMember)].genes;
+    const std::array<int, 4> savedFirstGenes = {
+        app.game.party[size_t(firstMember)].genes[0], app.game.party[size_t(firstMember)].genes[1],
+        app.game.party[size_t(firstMember)].genes[2], app.game.party[size_t(firstMember)].genes[3]};
+    const std::array<int, 4> savedSecondGenes = {
+        app.game.party[size_t(secondMember)].genes[0], app.game.party[size_t(secondMember)].genes[1],
+        app.game.party[size_t(secondMember)].genes[2], app.game.party[size_t(secondMember)].genes[3]};
     app.game.items.clear();
     app.game.party[size_t(firstMember)].genes[1] = 0;
     app.game.party[size_t(firstMember)].genes[2] = 0;
@@ -14798,8 +14802,10 @@ int mobileInputSelfTest(App& app) {
             }
         }
     }
-    app.game.party[size_t(firstMember)].genes = savedFirstGenes;
-    app.game.party[size_t(secondMember)].genes = savedSecondGenes;
+    std::copy(savedFirstGenes.begin(), savedFirstGenes.end(),
+              app.game.party[size_t(firstMember)].genes);
+    std::copy(savedSecondGenes.begin(), savedSecondGenes.end(),
+              app.game.party[size_t(secondMember)].genes);
     app.game.items = savedItems;
     app.campOpen = false;
     app.runner.stop();
